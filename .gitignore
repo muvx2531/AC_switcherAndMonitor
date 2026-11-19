@@ -1,0 +1,9 @@
+# STM32CubeIDE build outputs
+/F407_smartswitch/Debug/
+/F407_smartswitch/Release/
+
+# Local IDE and debug state
+.metadata/
+*.launch
+*.swp
+*.tmp
