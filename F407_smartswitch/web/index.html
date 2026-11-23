@@ -98,7 +98,7 @@ label.f input,label.f select{color:var(--fg);font-family:var(--mono)}
   </section>
 
   <section class="view" id="v-relays" hidden>
-    <div class="banner warn">Draft. Relay commands go through the Control service (architecture Phase 2). On firmware without it, the buttons stay disabled.</div>
+    <div class="banner bad" id="relay-na" hidden>Relay control is not available on this firmware (read-only build). Relay commands arrive with the Control service (architecture Phase 2). For bench tests use the serial console.</div>
     <div class="banner info" id="relay-auth">Sign in to send relay commands. Turning a load OFF or power-cycling it asks for your password again.</div>
     <div class="row r4" id="relay-ctl"></div>
     <div class="card"><h2>Recent commands</h2>
@@ -195,15 +195,22 @@ function renderStatus(d) {
     ["DMA start errors", l.dma_start_err], ["DMA transfer errors", l.dma_xfer_err]]);
   $("tasks").innerHTML = d.sys.tasks.map(t => `<tr><td>${esc(t.name)}</td><td class="n">${t.prio}</td><td class="n">${t.stack_free < 64 ? badge(t.stack_free, "bad") : t.stack_free}</td></tr>`).join("");
   const s = d.sys;
-  $("sys").innerHTML = kv([["Uptime", uptime(d.fw.uptime_ms)], ["Heap free", s.heap_free + " B"], ["Heap minimum ever", s.heap_min + " B"],
+  const wd = s.watchdog;
+  $("sys").innerHTML = kv([["Uptime", uptime(d.fw.uptime_ms)], ["Last reset", esc(s.reset_cause || "—")],
+    ["Watchdog", wd ? (wd.phase === "run" ? badge("supervised", "ok") : wd.phase === "boot" ? badge("boot phase", "warn") : badge(wd.phase, "bad")) : "—"],
+    ["RTC across reset", s.rtc_kept == null ? "—" : s.rtc_kept ? badge("kept", "ok") : badge("reset to default", "warn")],
+    ["I2C bus recoveries", s.i2c_recoveries ?? "—"],
+    ["Heap free", s.heap_free + " B"], ["Heap minimum ever", s.heap_min + " B"],
     ["Heap total", s.heap_total + " B"], ["Firmware build", esc(d.fw.build)]]);
   $("heap-bar").style.width = (100 - s.heap_free / s.heap_total * 100).toFixed(1) + "%";
 }
 
 function renderRelayCtl() {
   const d = S.data; if (!d) return;
-  const can = S.auth && d.control && d.control.available, coil = d.control ? d.control.coil_supply : false;
-  $("relay-auth").hidden = S.auth;
+  const avail = !!(d.control && d.control.available);
+  const can = S.auth && avail, coil = d.control ? d.control.coil_supply : false;
+  $("relay-na").hidden = avail;
+  $("relay-auth").hidden = S.auth || !avail;
   $("relay-ctl").innerHTML = [0, 1, 2, 3].map(ch => {
     const [m, c, t] = relayState(d.relay, ch), cyc = d.control && d.control.cycle_remaining_s ? d.control.cycle_remaining_s[ch] : 0;
     return `<div class="card"><div class="ch">CH${ch + 1}</div><div class="big">${badge(m, c)}</div>
@@ -353,7 +360,7 @@ function mockStatus() {
     vbat: { ok: true, raw: 3207 + (t / 1000 % 3 | 0), mv_est: 6553 },
     amc_diag: [1, 1, 1, 0],
     flash: [{ ok: true, jedec: "EF 40 18" }, { ok: true, jedec: "EF 40 18" }],
-    sys: { heap_free: 24800, heap_min: 15912, heap_total: 32768, log: { queued: 0, high: 412, dropped: 0, dma_start_err: 0, dma_xfer_err: 0 },
+    sys: { heap_free: 24800, heap_min: 15912, heap_total: 49152, reset_cause: "POWER_ON", watchdog: { phase: "run" }, rtc_kept: true, i2c_recoveries: 1, log: { queued: 0, high: 412, dropped: 0, dma_start_err: 0, dma_xfer_err: 0 },
       tasks: [{ name: "defaultTask", prio: 24, stack_free: 180 }, { name: "debugRx", prio: 25, stack_free: 310 }, { name: "debugTx", prio: 2, stack_free: 120 },
               { name: "netTask", prio: 18, stack_free: 413 }, { name: "httpServer", prio: 16, stack_free: 52 }] },
   };

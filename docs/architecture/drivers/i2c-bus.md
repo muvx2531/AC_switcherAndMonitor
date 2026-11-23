@@ -19,12 +19,14 @@ callback ที่ลงทะเบียนกับ handle (`USE_HAL_I2C_REGI
 - OLED ส่ง chunk ≤ 128 bytes แล้วปล่อย lock ระหว่าง chunk เพื่อให้ Control แทรกได้ภายใน ~3 ms
 - ห้ามใครลงทะเบียน callback ของ I2C1 นอกจาก driver นี้
 
-## ต้องเปลี่ยน (S3-2)
-- ตอนนี้ timeout แล้ว `faulted = true` จนกว่าจะ reset → เปลี่ยนเป็น **recovery**:
-  abort DMA → ตั้ง SCL เป็น GPIO แล้ว toggle 9 ครั้ง → ส่ง STOP → `HAL_I2C_DeInit` / `HAL_I2C_Init`
-  → **ลงทะเบียน callback ใหม่** (DeInit/Init reset callback กลับเป็น default) → caller อ่านกลับ
-- recovery ไม่เปลี่ยน latch ของ PCA จึงไม่ผิด I3
-- recovery ไม่สำเร็จ N ครั้ง → รายงาน fault แต่ยังลองต่อเป็นระยะ
-- recovery เป็นขั้นแรกของ boot ก่อนอ่าน PCA (S6-1)
+## Recovery (S3-2) — ทำแล้วใน Phase 1
+- `I2cBus_Recover()`: abort DMA → I2C1 SWRST → `HAL_I2C_DeInit` → GPIO toggle SCL 9 ครั้ง + STOP →
+  `HAL_I2C_Init` (DMA/IRQ กลับมา) → **ลงทะเบียน callback ใหม่** (DeInit/Init reset callback เป็น default)
+- ไม่เขียน register ของ slave ตัวไหน จึงไม่ผิด I3 ผู้เรียกต้องอ่านกลับเองหลัง fault
+- timeout แล้ว `faulted = true` → `I2cBus_Lock` ครั้งถัดไปทำ recovery เอง (ไม่เกิน 1 ครั้ง/วินาที) ถ้ายังไม่สำเร็จคืน `I2C_BUS_FAULTED` แล้วลองใหม่ครั้งหน้า
+- เรียกเป็นขั้นแรกของ boot ก่อนอ่าน PCA (S6-1) นับจำนวนด้วย `I2cBus_RecoveryCount()`
+- ยังไม่ได้ทดสอบกับ fault จริง (ช็อต SDA) ดู `docs/phase1-foundation.md`
+
+## ยังต้องเพิ่ม
 - helper ปัจจุบันส่งได้แค่ register 1 byte ต้องเพิ่ม API สำหรับข้อมูลหลาย byte ของ OLED
 - ถ้าให้ CubeMX เปิด I2C1 EV/ER IRQ ภายหลัง ต้องเอา handler ที่เขียนเองออกก่อน และคง priority 5

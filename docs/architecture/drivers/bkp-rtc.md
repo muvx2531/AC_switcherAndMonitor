@@ -23,5 +23,7 @@
 | BKP8R | Supervisor | PC ตอน HardFault ล่าสุด |
 | BKP9R–BKP19R | สำรอง | — |
 
-## ต้องเปลี่ยน
-`MX_RTC_Init()` ปัจจุบันเรียก `HAL_RTC_SetTime` ทุก boot ต้องแก้ใน `USER CODE` ให้ข้ามเมื่อ BKP0R มี magic
+## สถานะ
+ทำแล้วใน Phase 1: `MX_RTC_Init()` (USER CODE `Check_RTC_BKUP`) ข้ามการตั้งเวลาเมื่อ BKP0R = `0x52544331` ("RTC1")
+และเขียน magic หลังตั้งเวลาครั้งแรก ทดสอบแล้วว่าเวลาคงอยู่ผ่าน reset (`docs/phase1-foundation.md`)
+slot ของ Control และ Supervisor ยังไม่ได้ใช้
