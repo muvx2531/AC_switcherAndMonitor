@@ -241,7 +241,7 @@ async function api(method, path, body) {
   if (useMock) return mockApi(method, path, body);
   const r = await fetch(path, { method, cache: "no-store", headers: { "Content-Type": "application/json", ...(S.csrf ? { "X-CSRF-Token": S.csrf } : {}) },
     body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
+  const j = await r.json().catch(() => ({ error: r.status === 501 ? "not available on this firmware" : undefined }));
   if (!r.ok) throw Object.assign(new Error(j.error || r.status), { status: r.status, body: j });
   return j;
 }
@@ -251,7 +251,7 @@ $("authbtn").onclick = () => {
   if (S.auth) { api("POST", "/api/logout").finally(() => setAuth(false)); return; }
   openModal("Sign in", `<p class="sub">Required for relay commands, network settings and firmware update.</p>`, "Sign in", true, async pw => {
     try { const j = await api("POST", "/api/login", { password: pw }); setAuth(true, j.csrf); }
-    catch (e) { return e.status === 429 ? "Too many attempts. Wait and try again." : "Wrong password"; }
+    catch (e) { return e.status === 429 ? "Too many attempts. Wait and try again." : e.status === 501 ? "Sign-in is not available on this firmware yet" : "Wrong password"; }
   });
 };
 

@@ -1,6 +1,7 @@
 #include "debug_protocol.h"
 #include "debug_log.h"
 #include "pca9536.h"
+#include "adc_raw.h"
 #include "main.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -17,26 +18,12 @@ static UART_HandleTypeDef *serial;
 static TaskHandle_t worker;
 static volatile uint32_t rxWraps;
 static volatile bool rxFailed;
-extern ADC_HandleTypeDef hadc2;
-static volatile uint16_t adcSamples[10];
-static bool adcStarted;
 
 static void rxCompleteCallback(UART_HandleTypeDef *uart);
 static void errorCallback(UART_HandleTypeDef *uart);
 
-static bool readBatteryRaw(uint16_t *raw)
-{
-  if (!adcStarted) {
-    if (HAL_ADC_GetState(&hadc2) & HAL_ADC_STATE_REG_BUSY) return false;
-    adcSamples[8] = 0xffffU;
-    if (HAL_ADC_Start_DMA(&hadc2, (uint32_t *)adcSamples, 10) != HAL_OK) return false;
-    adcStarted = true;
-  }
-  for (unsigned int i = 0; i < 40U && adcSamples[8] == 0xffffU; ++i) vTaskDelay(pdMS_TO_TICKS(1));
-  if (adcSamples[8] > 4095U || HAL_ADC_GetError(&hadc2) != HAL_ADC_ERROR_NONE) return false;
-  *raw = adcSamples[8];
-  return true;
-}
+/* ADC2 is owned by adc_raw.c (shared with the status web). */
+static bool readBatteryRaw(uint16_t *raw) { return AdcRaw_GetVbat(raw); }
 
 static int hexDigit(char c)
 {
@@ -73,8 +60,7 @@ static void handleLine(char *line)
     if (!readBatteryRaw(&raw)) {
       (void)snprintf(body, sizeof(body), "%s,ERR,ADC", seq); response(body); return;
     }
-    /* Estimate only: VREF+=3000 mV, divider 56k/(49.9k+49.9k+56k). */
-    uint32_t mv = (uint32_t)(((uint64_t)raw * 3000U * 1558U + (4095U * 560U) / 2U) / (4095U * 560U));
+    uint32_t mv = AdcRaw_VbatEstimateMv(raw);
     (void)snprintf(body, sizeof(body), "%s,BATV,%u,%lu,3000", seq,
         (unsigned)raw, (unsigned long)mv);
     response(body); return;

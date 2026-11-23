@@ -34,6 +34,7 @@
 - HSE จริงเป็น **16 MHz** (doc เขียน 25 MHz)
 - flash CS จริงเป็น **PD7 / PD13** (doc เขียน PE3 / PE5)
 - เพิ่ม PB3 Vin_Detect ใน pin map
+- `.ioc` ปัจจุบันใช้ **SW1 = PA15** (doc เขียน PE4) และ **En_3v3_AMC = PC10** (doc เขียน PE2) ต้องยืนยันกับ schematic REV2 ว่าอันไหนถูก แล้วแก้ไฟล์ task ที่อ้างขาเหล่านี้ (power.md, local-ui.md)
 - 06 §2: เปลี่ยนจาก "ทุก boot เขียน output 0x00" เป็นพฤติกรรม KeepState ตาม I1–I4 และตัดข้อความ "WDT reset แล้วคืนโหลด"
 
 ## ความเสี่ยงที่รู้อยู่

@@ -21,8 +21,10 @@ on its own handle in its init function.
 
 The CubeMX boot-time `MX_ETH_Init` is bypassed. `eth_probe.c` powers and probes
 the PHY using HAL, deinitializes HAL, then hands MAC/IRQ ownership to CycloneTCP
-for a temporary static-IP ping test. See `docs/ethernet-bringup.md` before
-changing Ethernet initialization.
+(MAC from STM32 UID, DHCP with static fallback). See `docs/ethernet-bringup.md` before
+changing Ethernet initialization. The read-only status web (`web_server.c`, page in
+`web/`, packed into `Core/Src/res.c` by `python tools/make_res.py`) is described in
+`docs/web-status-api.md`; never edit `res.c` by hand.
 
 For the two SPI flash devices and the guarded destructive test, see
 [`docs/flash-bringup.md`](docs/flash-bringup.md). Do not rerun the write/erase

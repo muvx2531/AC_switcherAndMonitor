@@ -85,11 +85,42 @@ or driver state; the page labels raw values and does not interpret polarity.
 | `net.*` | CycloneTCP interface + PHY probe | `mode` becomes `dhcp` when the DHCP lease is used |
 | `sys.*` | `xPortGetFreeHeapSize`, `xPortGetMinimumEverFreeHeapSize`, `uxTaskGetSystemState`, `DebugLog_GetStats` | `stack_free` in words |
 
-## Firmware plan (next step, not started)
+## Firmware implementation (Phase 0.5, branch `feature/status-web`)
 
-1. Enable `HTTP_SERVER_SUPPORT` (CycloneTCP), 1–2 connections, measure heap; raise
-   `configTOTAL_HEAP_SIZE` through the `.ioc` only if needed.
-2. Single temporary ADC owner module used by both serial and web.
-3. DHCP with static fallback `192.168.0.223/24` when no lease within ~10 s; MAC from STM32 UID.
-4. Remove the TCP echo test from the build path used by the web build.
-5. No login in this bench-only phase (direct cable / isolated LAN); login is Phase 6.
+Built in Debug and Release with 0 errors / 0 warnings on 2026-11-23. **Not yet tested on
+hardware.**
+
+| Part | Where | Notes |
+|---|---|---|
+| Page packing | `tools/make_res.py` → `Core/Src/res.c` | gzip of every file in `web/`, stored as `<name>.gz` in the CycloneCommon resource format (`resource_manager.h`). Deterministic output; `res.c` is committed |
+| HTTP server | `Core/Src/web_server.c` | CycloneTCP HTTP server, 2 connections, port 80, default document `index.html`. `GET /api/status` builds JSON (2 KB static buffer, mutex). Other `/api/*` return 501. Static files come from `res.c` via `resGetData` with gzip |
+| CycloneTCP options | end of `config/net_config.h` ("SmartSwitch project overrides") | `HTTP_SERVER_GZIP_TYPE_SUPPORT`, `HTTP_SERVER_MAX_CONNECTIONS 2`, buffer 1024, stack 700 words. Re-check after CubeMX regeneration |
+| ADC owner | `Core/Src/adc_raw.c` | single starter of ADC2 DMA, used by serial `BACKUP/BATV` and the web. Replaced later by Acquisition |
+| MAC | `eth_probe.c` `macFromUid` | `02:xx:xx:xx:xx:xx`, FNV-1a 64 of the 96-bit UID. Logged at boot and shown on the page |
+| IP | `eth_probe.c` | DHCP; if no lease within 10 s, static `192.168.0.223/24` until reboot (fallback is applied from the default task, not inside the CycloneTCP callback) |
+| Heap | `FreeRTOSConfig.h` + `.ioc` | `configTOTAL_HEAP_SIZE` 32 KB → 48 KB. Static RAM (data+bss+heap) ≈ 105 KB of 128 KB |
+| TCP echo test | `tcp_echo_test.c` | kept in the tree but no longer started |
+
+Not in this phase: login, relay commands, network settings, firmware update (the page
+tabs for them stay disabled or show "not available on this firmware").
+
+### Updating the page
+
+1. Edit `F407_smartswitch/web/index.html` (preview it directly in a browser: mock data,
+   password `demo`).
+2. `python tools/make_res.py`
+3. Build and flash. Commit `web/index.html` and `Core/Src/res.c` together.
+
+New `.c` files need the CubeIDE-generated makefiles refreshed: build once in the IDE (or
+headless: `stm32cubeidec -application org.eclipse.cdt.managedbuilder.core.headlessbuild
+-data <workspace> -import <project dir> -build F407_smartswitch/Debug`).
+
+### Bench test
+
+1. Direct cable to the PC (`192.168.0.222/24`): after ~10 s the log shows
+   `ETH: no DHCP lease ..., static fallback 192.168.0.223/24`; open `http://192.168.0.223/`.
+2. Behind the RUTM51: the log shows `ETH: address <ip> (DHCP)`; create a static lease for
+   the logged MAC.
+3. Watch `sys.heap_min` and task `stack_free` on the page while it polls for several minutes
+   with two browser tabs open.
+4. Toggle 24 V and read `Vin_Detect` / `eFuse_iLim` live (open item H2).
