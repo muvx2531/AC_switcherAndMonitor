@@ -9,6 +9,8 @@
 bool Supervisor_Start(void);
 void Supervisor_BootComplete(void);
 void Supervisor_Heartbeat(void);
+/* Control task progress; once called, the run phase also requires it < 2 s old. */
+void Supervisor_ControlHeartbeat(void);
 /* "boot", "run", "boot_timeout" or "heartbeat_lost". */
 const char *Supervisor_Phase(void);
 

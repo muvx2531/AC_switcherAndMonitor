@@ -31,13 +31,17 @@ Examples on wire (`\r\n` follows each line):
 Success body is `SS,OK,O,I,C`: sequence, lower-nibble output latch, input
 register and configuration. `C=0` means all four GPIOs are configured as
 outputs. Read-back is electrical logic status, not proof of relay coil or
-contact operation. SET checks output configuration, uses the PCA9536 driver,
-and reads back; a valid SET can actuate relays immediately. Startup policy
+contact operation. **Since Phase 2, SET goes through the Control service**
+(`docs/phase2-control.md`): bits set become one `SET_OFF` request, the other
+bits one `SET_ON` request; the reply waits up to 1 s per request and then reads
+the registers back. A valid SET can actuate relays immediately. Startup policy
 remains: preserve pins already outputs, configure input pins as outputs with
 LOW. State is **not saved across PCA9536 power loss**.
 
-Errors use `SS,ERR,CHECKSUM`, `SS,ERR,COMMAND`, `SS,ERR,DIRECTION`, or
-`SS,ERR,I2C,<number>`. An I2C failure can leave physical state uncertain.
+Errors use `SS,ERR,CHECKSUM`, `SS,ERR,COMMAND`, `SS,ERR,I2C,<number>` (read-back
+failed) or `SS,ERR,<reason>` from Control: `NO_COIL_SUPPLY` (OFF requested without
+24 V), `STATE_UNKNOWN`, `DIRECTION`, `BUSY`, `NOT_READY`, `I2C`, `FAILED`, `UNKNOWN`.
+A rejected OFF part leaves the ON part unsent. An I2C failure can leave physical state uncertain.
 Malformed framing with no usable sequence/checksum is silently discarded.
 There is no replay/duplicate suppression; GET and whole-pattern SET are
 idempotent, but re-check state after a timeout rather than assuming failure.

@@ -167,17 +167,20 @@ function uptime(ms) {
 const useMock = !/^https?:$/.test(location.protocol) || new URLSearchParams(location.search).has("mock");
 const S = { auth: false, csrf: null, data: null, outcomes: [] };
 
-function relayState(r, ch) {
-  const bit = 1 << ch;
-  if (!r.ok) return ["UNKNOWN", "bad", "I2C error " + esc(r.err) + " — state not confirmed"];
+function relayState(d, ch) {
+  const r = d.relay, c = d.control, bit = 1 << ch;
+  if (!r.ok || (c && c.available && !c.state_known)) return ["UNKNOWN", "bad", "Expander read failed — state not confirmed"];
   if (r.config & bit) return ["LOAD ON", "ok", "Pin is input (expander default) — coil off"];
-  if (r.output & bit) return ["LOAD OFF", "warn", "Latch HIGH — coil commanded on"];
+  if (r.output & bit) {
+    if (c && c.available && !c.coil_supply) return ["LOAD ON", "ok", "Latch HIGH but no 24 V coil supply — coil off"];
+    return ["LOAD OFF", "warn", "Latch HIGH — coil commanded on"];
+  }
   return ["LOAD ON", "ok", "Latch LOW — coil off"];
 }
 
 function renderStatus(d) {
   $("hdr-id").textContent = `${d.net.mac} · ${d.net.ip || "no IP"} · fw ${d.fw.build}`;
-  $("relays").innerHTML = [0, 1, 2, 3].map(ch => { const [m, c, t] = relayState(d.relay, ch);
+  $("relays").innerHTML = [0, 1, 2, 3].map(ch => { const [m, c, t] = relayState(d, ch);
     return `<div class="card"><div class="ch">CH${ch + 1}</div><div class="big">${badge(m, c)}</div><p class="note">${t}</p></div>`; }).join("");
   $("power").innerHTML = kv([["Vin_Detect (PB3)", lvl(d.power.vin_detect)], ["eFuse_iLim (PB9)", lvl(d.power.efuse_ilim)],
     ["Batt CHRG (PE13)", lvl(d.power.chrg)], ["Batt FAULT (PE11)", lvl(d.power.fault)]]);
@@ -212,7 +215,7 @@ function renderRelayCtl() {
   $("relay-na").hidden = avail;
   $("relay-auth").hidden = S.auth || !avail;
   $("relay-ctl").innerHTML = [0, 1, 2, 3].map(ch => {
-    const [m, c, t] = relayState(d.relay, ch), cyc = d.control && d.control.cycle_remaining_s ? d.control.cycle_remaining_s[ch] : 0;
+    const [m, c, t] = relayState(d, ch), cyc = d.control && d.control.cycle_remaining_s ? d.control.cycle_remaining_s[ch] : 0;
     return `<div class="card"><div class="ch">CH${ch + 1}</div><div class="big">${badge(m, c)}</div>
       <p class="note">${cyc ? "Power-cycle: " + cyc + " s left" : t}</p>
       <div class="btns"><button data-a="SET_ON" data-ch="${ch}" ${can ? "" : "disabled"}>On</button>
@@ -247,7 +250,8 @@ $("mok").onclick = async () => {
 async function api(method, path, body) {
   if (useMock) return mockApi(method, path, body);
   const r = await fetch(path, { method, cache: "no-store", headers: { "Content-Type": "application/json", ...(S.csrf ? { "X-CSRF-Token": S.csrf } : {}) },
-    body: body ? JSON.stringify(body) : undefined });
+    body: method === "POST" ? JSON.stringify({ ...(body || {}), ...(S.csrf ? { token: S.csrf } : {}) }) : undefined });
+  if (r.status === 401 && S.auth) setAuth(false);
   const j = await r.json().catch(() => ({ error: r.status === 501 ? "not available on this firmware" : undefined }));
   if (!r.ok) throw Object.assign(new Error(j.error || r.status), { status: r.status, body: j });
   return j;
@@ -277,6 +281,8 @@ $("relay-ctl").onclick = e => {
       o.id = j.request_id; S.outcomes.unshift(o); renderOutcomes(); pollOutcome(o);
     } catch (e) {
       if (e.status === 403) return "Wrong password";
+      if (e.status === 401) return "Session expired. Sign in again.";
+      if (e.status === 429) return "Too many attempts. Wait 30 s and try again.";
       o.state = "REJECTED"; o.reason = (e.body && e.body.reason) || e.message; S.outcomes.unshift(o); renderOutcomes();
     }
   });
@@ -355,7 +361,7 @@ function mockStatus() {
     fw: { build: "mock-0.5", uptime_ms: 8500 + t },
     net: { link: true, mode: "dhcp", ip: "192.168.1.10", mask: "255.255.255.0", gw: "192.168.1.1", mac: "06:3A:1F:52:9C:04", phy_id: "0007:C131" },
     relay: { ok: true, err: 0, output: M.output, input: 0xF0 | M.output, config: 0xF0 },
-    control: { available: true, coil_supply: on24, cycle_remaining_s: M.cycles.map(c => c ? Math.ceil((c - Date.now()) / 1000) : 0) },
+    control: { available: true, state_known: true, coil_supply: on24, cycle_remaining_s: M.cycles.map(c => c ? Math.ceil((c - Date.now()) / 1000) : 0) },
     power: { vin_detect: on24 ? 1 : 0, efuse_ilim: on24 ? 1 : 0, chrg: 1, fault: 1 },
     vbat: { ok: true, raw: 3207 + (t / 1000 % 3 | 0), mv_est: 6553 },
     amc_diag: [1, 1, 1, 0],

@@ -18,18 +18,27 @@ Design draft 2026-11-23; firmware side not implemented. The page has four tabs:
   `GET /api/status` every 1 s, times out after 2.5 s and shows "Disconnected" after two failures.
 - UI language: English. Primary device: laptop (responsive down to phone width).
 
-## Authentication (proposal)
+## Authentication (implemented in Phase 2, bench version)
 
-- One password per board (stored as a salted hash in config; unique default or forced change).
-- `POST /api/login {password}` → `{csrf}` and a session cookie (`HttpOnly`, `SameSite=Strict`).
-  Every state-changing request sends `X-CSRF-Token`. Failed logins are rate limited (HTTP 429).
+- One password per board. **Now:** derived from the STM32 UID and printed on the serial
+  console at boot (`WEB: bench password ss-xxxxxxxx`). **Later (Storage):** stored as a
+  salted hash in config, changeable, forced change on first use.
+- `POST /api/login {password}` → `{csrf: <32 hex>}` (random, STM32 RNG). Every POST after
+  sign-in carries it as `token` in the JSON body (the page adds it automatically); missing or
+  expired → 401. Sessions: 4 max, 30 min idle. No cookie.
+- 5 wrong passwords (sign-in or re-authentication) → 30 s lockout, HTTP 429.
 - Re-authentication: requests that remove power from equipment (`SET_OFF`, `POWER_CYCLE`),
   network changes and firmware apply also carry `password` in the body. `SET_ON`
   (the safe direction) needs only the session.
 - Plain HTTP sends the password unencrypted: acceptable only on the cabinet LAN or through
   the router VPN (decision S7-4). Never port-forward the board.
 
-## Control and configuration endpoints (proposal)
+## Control and configuration endpoints
+
+Implemented in Phase 2: `POST /api/login`, `POST /api/logout {token}`,
+`POST /api/relay`, `GET /api/relay/outcome?id=` and `control` in `/api/status`
+(`available`, `state_known`, `coil_supply`, `cycle_remaining_s[4]`, `effective[4]`,
+`glitches`, `supply_releases`, `boot_note`). Network and firmware endpoints still return 501.
 
 | Method / path | Body | Response | Errors |
 |---|---|---|---|

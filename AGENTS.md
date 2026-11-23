@@ -39,6 +39,10 @@ do not bypass its SPI2 mutex with the old blocking probe.
 Before using I2C1, PCA9536, or relay outputs, read
 [`docs/pca9536-bringup.md`](docs/pca9536-bringup.md). Physical relay operation
 remain unconfirmed. The user specifies LOW as coil OFF; do not infer actual
-coil/contact state from I/O register readback.
+coil/contact state from I/O register readback. Since Phase 2 the Control task
+(`control.c`, `docs/phase2-control.md`) is the only writer of the PCA9536 after
+boot: change relays only through `Control_Submit`, never `PCA9536_WriteMasked`
+from another module. Never send OFF or power-cycle commands to the board unless
+the user has said energizing coils is safe at that moment.
 
 For the temporary USART6 command interface, read docs/serial-protocol.md. SET can actuate relays; checksum is not authentication.

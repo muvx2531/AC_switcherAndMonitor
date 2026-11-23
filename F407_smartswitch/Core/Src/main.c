@@ -31,6 +31,7 @@
 #include "debug_protocol.h"
 #include "boot.h"
 #include "supervisor.h"
+#include "control.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -90,8 +91,7 @@ const osThreadAttr_t defaultTask_attributes = {
 };
 /* USER CODE BEGIN PV */
 volatile uint32_t flashTestRequest;
-volatile uint32_t relay3TestRequest;
-volatile uint32_t relayPatternRequest;
+/* Relay debug hooks were removed in Phase 2: relays change only through Control. */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -894,6 +894,10 @@ void StartDefaultTask(void *argument)
         pcaAfter.config & 0x0fU, pcaAfter.output & 0x0fU);
   else
     (void) DebugLog_Printf("PCA9536: startup failed result=%u HAL=0x%08lX; state unknown\r\n", i2cResult, (unsigned long)I2cBus_LastHalError());
+  /* From here on the Control task is the only writer of the PCA9536. It starts
+   * even when the read failed, in state UNKNOWN (I3). */
+  if (!Control_Start())
+    (void) DebugLog_Printf("CTRL: start failed\r\n");
   if (!protocolReady)
     (void) DebugLog_Printf("protocol: USART6 callback registration or RX DMA start failed\r\n");
   W25Q128_Result flashInit = W25Q128_Init(&hspi2);
@@ -906,48 +910,6 @@ void StartDefaultTask(void *argument)
   for(;;)
   {
     Supervisor_Heartbeat();
-    if (relayPatternRequest == 1U)
-    {
-      relayPatternRequest = 0U;
-      PCA9536_Registers state;
-      I2cBusResult result = PCA9536_WriteMasked(0x0fU, 0x03U);
-      if (result == I2C_BUS_OK) result = PCA9536_ReadRegisters(&state);
-      if (result == I2C_BUS_OK)
-        (void) DebugLog_Printf("Relay hold: requested=3 latch=%X input=%X config=%X\r\n",
-            state.output & 0x0fU, state.input & 0x0fU, state.config & 0x0fU);
-      else
-        (void) DebugLog_Printf("Relay hold: failed %u; state unknown\r\n", result);
-    }
-    if (relay3TestRequest == 1U)
-    {
-      relay3TestRequest = 0U;
-      PCA9536_Registers state;
-      I2cBusResult result = PCA9536_ReadRegisters(&state);
-      if (result != I2C_BUS_OK || (state.config & 0x04U) != 0U || (state.output & 0x04U) != 0U)
-      {
-        (void) DebugLog_Printf("Relay 3 test: skipped, IO2 must be output LOW\r\n");
-      }
-      else
-      {
-        for (unsigned int i = 0; i < 3U && result == I2C_BUS_OK; i++)
-        {
-          result = PCA9536_WriteMasked(0x04U, 0x04U);
-          if (result == I2C_BUS_OK) result = PCA9536_ReadRegisters(&state);
-          if (result == I2C_BUS_OK && ((state.output & 0x04U) == 0U || (state.input & 0x04U) == 0U)) result = I2C_BUS_TRANSFER_ERROR;
-          (void) DebugLog_Printf("Relay 3 test: cycle %u IO2 HIGH %s\r\n", i + 1U, result == I2C_BUS_OK ? "PASS" : "FAIL");
-          osDelay(1500);
-          Supervisor_Heartbeat();
-          I2cBusResult off = PCA9536_WriteMasked(0x04U, 0U);
-          if (off == I2C_BUS_OK) off = PCA9536_ReadRegisters(&state);
-          if (off == I2C_BUS_OK && ((state.output & 0x04U) != 0U || (state.input & 0x04U) != 0U)) off = I2C_BUS_TRANSFER_ERROR;
-          (void) DebugLog_Printf("Relay 3 test: cycle %u IO2 LOW %s\r\n", i + 1U, off == I2C_BUS_OK ? "PASS" : "FAIL");
-          if (result == I2C_BUS_OK) result = off;
-          osDelay(1000);
-          Supervisor_Heartbeat();
-        }
-        (void) DebugLog_Printf("Relay 3 test: %s\r\n", result == I2C_BUS_OK ? "COMPLETE" : "FAILED; relay state may be unknown");
-      }
-    }
     if (flashTestRequest == 1U)
     {
       flashTestRequest = 0U;
