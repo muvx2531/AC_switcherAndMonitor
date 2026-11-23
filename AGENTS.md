@@ -4,6 +4,13 @@ The STM32CubeIDE project is `F407_smartswitch/`. Preserve existing user changes;
 check `git status` before editing. CubeMX-generated files contain `USER CODE`
 sections: keep application changes in those sections or in separate files.
 
+The agreed target architecture (v1) is in
+[`docs/architecture/README.md`](docs/architecture/README.md): read it first, then only
+the task/driver file you will change. Its invariants I1–I5 (relay state preserved
+across reset, firmware never changes coil state on its own except the listed cases)
+apply to every change. The architecture is not implemented yet; the bring-up docs
+below describe current code behavior. Follow `docs/architecture/migration-plan.md`.
+
 Before using or changing USART6 debug logging, read
 [`docs/debug-logging.md`](docs/debug-logging.md). The document describes its API,
 interrupt ownership, concurrency constraints, and current hardware test status.
