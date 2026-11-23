@@ -13,6 +13,8 @@ typedef enum { PHASE_BOOT, PHASE_RUN, PHASE_BOOT_TIMEOUT, PHASE_HEARTBEAT_LOST }
 
 static volatile Phase phase = PHASE_BOOT;
 static volatile TickType_t lastHeartbeat;
+static volatile TickType_t lastControlHeartbeat;
+static volatile bool controlRegistered;
 
 /* Static allocation; the stack lives in CCM (never used for DMA). */
 static StaticTask_t tcb;
@@ -30,7 +32,9 @@ static void supervisorTask(void *argument)
       if (now - start < pdMS_TO_TICKS(BOOT_DEADLINE_MS)) kick = true;
       else phase = PHASE_BOOT_TIMEOUT;
     } else if (phase == PHASE_RUN) {
-      if (now - lastHeartbeat < pdMS_TO_TICKS(HEARTBEAT_TIMEOUT_MS)) kick = true;
+      bool defaultOk = now - lastHeartbeat < pdMS_TO_TICKS(HEARTBEAT_TIMEOUT_MS);
+      bool controlOk = !controlRegistered || now - lastControlHeartbeat < pdMS_TO_TICKS(HEARTBEAT_TIMEOUT_MS);
+      if (defaultOk && controlOk) kick = true;
       else phase = PHASE_HEARTBEAT_LOST;
     }
     if (kick) {
@@ -64,6 +68,12 @@ void Supervisor_BootComplete(void)
 void Supervisor_Heartbeat(void)
 {
   lastHeartbeat = xTaskGetTickCount();
+}
+
+void Supervisor_ControlHeartbeat(void)
+{
+  lastControlHeartbeat = xTaskGetTickCount();
+  controlRegistered = true;
 }
 
 const char *Supervisor_Phase(void)

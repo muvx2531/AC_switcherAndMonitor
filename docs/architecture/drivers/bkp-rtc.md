@@ -13,10 +13,10 @@
 | Register | เจ้าของ | เนื้อหา |
 |---|---|---|
 | BKP0R | Time module (Supervisor) | magic ว่า RTC ถูกตั้งแล้ว `MX_RTC_Init` ต้องเช็กค่านี้และไม่ตั้งเวลาใหม่ |
-| BKP1R | Control | `pending_restore` magic |
-| BKP2R | Control | `channel_mask` (8 bit) + `duration_s` (16 bit) |
-| BKP3R | Control | `request_id` |
-| BKP4R | Control | CRC ของ BKP2R–BKP3R |
+| BKP1R | Control | `0x5052` ใน 16 bit บน + channel mask (bit 0–3) เขียนเป็นตัวสุดท้าย ลบเป็นตัวแรก |
+| BKP2R | Control | duration_s ของ CH1 (16 bit ล่าง) และ CH2 (16 bit บน) |
+| BKP3R | Control | duration_s ของ CH3 และ CH4 |
+| BKP4R | Control | ค่าตรวจสอบของ BKP1R–BKP3R |
 | BKP5R | Supervisor | จำนวน reset ในหน้าต่างปัจจุบัน |
 | BKP6R | Supervisor | เวลาเริ่มหน้าต่าง (RTC) |
 | BKP7R | Supervisor | สาเหตุ reset ล่าสุด |

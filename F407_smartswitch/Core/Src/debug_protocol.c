@@ -2,6 +2,7 @@
 #include "debug_log.h"
 #include "pca9536.h"
 #include "adc_raw.h"
+#include "control.h"
 #include "main.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -39,6 +40,30 @@ static void response(const char *body)
   char frame[96];
   int n = snprintf(frame, sizeof(frame), "@%s*%02X\r\n", body, sum);
   if (n > 0 && (size_t)n < sizeof(frame)) (void)DebugLog_Write(frame, (size_t)n);
+}
+
+/* Submit and wait (max ~1 s) for the outcome. NULL on success, else a reason. */
+static const char *submitAndWait(CtrlType type, uint8_t mask)
+{
+  if (mask == 0U) return NULL;
+  ControlRequest req = { .type = type, .channel_mask = mask, .duration_s = 0, .source = SRC_SERIAL };
+  uint32_t id;
+  CtrlSubmitResult s = Control_Submit(&req, &id);
+  if (s != CTRL_SUBMIT_ACCEPTED) return Control_SubmitResultName(s);
+  CtrlOutcome o = { .state = OUT_PENDING };
+  for (unsigned int i = 0; i < 100U; i++) {
+    if (!Control_GetOutcome(id, &o) || o.state != OUT_PENDING) break;
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  if (o.state == OUT_APPLIED) return NULL;
+  return o.reason != NULL ? o.reason : Control_OutcomeName(o.state);
+}
+
+static const char *applyPattern(uint8_t value)
+{
+  const char *reason = submitAndWait(CTRL_SET_OFF, value & CONTROL_ALL_CHANNELS);
+  if (reason == NULL) reason = submitAndWait(CTRL_SET_ON, (uint8_t)(~value) & CONTROL_ALL_CHANNELS);
+  return reason;
 }
 
 static void handleLine(char *line)
@@ -85,13 +110,16 @@ static void handleLine(char *line)
       (value = hexDigit(line[8])) >= 0) set = true;
   else { (void)snprintf(body, sizeof(body), "%s,ERR,COMMAND", seq); response(body); return; }
 
-  PCA9536_Registers regs;
-  I2cBusResult r = PCA9536_ReadRegisters(&regs);
-  if (r == I2C_BUS_OK && set && (regs.config & 0x0fU) != 0U) {
-    (void)snprintf(body, sizeof(body), "%s,ERR,DIRECTION", seq); response(body); return;
+  if (set) {
+    /* Phase 2: the serial port is an adapter of the Control service. Bit = 1 means
+     * coil on (load OFF): one SET_OFF for those bits and one SET_ON for the rest. */
+    const char *reason = applyPattern((uint8_t)value);
+    if (reason != NULL) {
+      (void)snprintf(body, sizeof(body), "%s,ERR,%s", seq, reason); response(body); return;
+    }
   }
-  if (r == I2C_BUS_OK && set) r = PCA9536_WriteMasked(0x0fU, (uint8_t)value);
-  if (r == I2C_BUS_OK && set) r = PCA9536_ReadRegisters(&regs);
+  PCA9536_Registers regs;  /* read-only */
+  I2cBusResult r = PCA9536_ReadRegisters(&regs);
   if (r != I2C_BUS_OK) {
     (void)snprintf(body, sizeof(body), "%s,ERR,I2C,%u", seq, (unsigned)r); response(body); return;
   }

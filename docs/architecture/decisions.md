@@ -62,4 +62,5 @@ ID อ้างถึง section ของ draft เดิมที่ถูก 
 | S7-3 | bootloader ขนาดเล็กตั้งแต่ v1 ใน sector 0–1 (32 KB) app เริ่มที่ sector 2 | ถ้า v1 ไม่มี bootloader จะอัปเดตผ่าน network ไม่ได้ตลอดไป |
 | S7-4 | web เฉพาะใน LAN (HTTP + login) เข้าจากระยะไกลผ่าน VPN ของ RUTM51 (แนะนำ Tailscale) **ห้าม port forward** | ซิม 4G มักเป็น CGNAT และไม่ควรเปิดอุปกรณ์ที่ตัดไฟได้ออก internet |
 | S7-5 | IP ผูกด้วย DHCP static lease บน router จาก MAC มี static IP สำรองตั้งผ่าน serial | MAC จาก UID คงที่ |
+| S7-7 | รหัสเข้าเว็บ**ใช้รหัสเดียวกันทุกบอร์ด** (เปลี่ยนจากข้อเสนอเดิมที่ให้ไม่ซ้ำกันต่อบอร์ด) เก็บใน `web_secrets.h` ที่ไม่เข้า git; MAC ยังสร้างจาก UID ต่อบอร์ดตาม S7-2 | สะดวกต่อเจ้าหน้าที่ ข้อแลกเปลี่ยน: ถ้ารหัสรั่ว ทุกบอร์ดได้รับผลกระทบ จึงต้องพึ่ง LAN + VPN ตาม S7-4 และต้องเปลี่ยนรหัสได้โดยไม่ build ใหม่เมื่อมี Storage |
 | S7-6 | remote แบบอื่น (MQTT/Modbus ผ่าน router) เป็นงาน v2 เพิ่มเป็น adapter | ไม่ต้องมี TLS บน MCU |
