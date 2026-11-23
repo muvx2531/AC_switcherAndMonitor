@@ -43,6 +43,8 @@ coil/contact state from I/O register readback. Since Phase 2 the Control task
 (`control.c`, `docs/phase2-control.md`) is the only writer of the PCA9536 after
 boot: change relays only through `Control_Submit`, never `PCA9536_WriteMasked`
 from another module. Never send OFF or power-cycle commands to the board unless
-the user has said energizing coils is safe at that moment.
+the user has said energizing coils is safe at that moment. The web password is
+shared by all boards and lives in the untracked `Core/Inc/web_secrets.h`
+(template `web_secrets.example.h`): never commit it, print it or put it in docs.
 
 For the temporary USART6 command interface, read docs/serial-protocol.md. SET can actuate relays; checksum is not authentication.

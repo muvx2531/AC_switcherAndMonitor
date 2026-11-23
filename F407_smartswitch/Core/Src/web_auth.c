@@ -5,6 +5,9 @@
 #include "task.h"
 #include <stdio.h>
 #include <string.h>
+#if __has_include("web_secrets.h")
+#include "web_secrets.h"  /* untracked: see web_secrets.example.h */
+#endif
 
 extern RNG_HandleTypeDef hrng;
 
@@ -23,13 +26,25 @@ static bool locked;
 
 void WebAuth_Init(void)
 {
-  /* Different salt from the MAC derivation so the MAC does not reveal it. */
+#ifdef WEB_SHARED_PASSWORD
+  /* Shared password for every board, from the untracked web_secrets.h. Never logged. */
+  _Static_assert(sizeof(WEB_SHARED_PASSWORD) >= 9 && sizeof(WEB_SHARED_PASSWORD) <= sizeof(password),
+      "WEB_SHARED_PASSWORD must be 8-15 characters");
+  (void)snprintf(password, sizeof(password), "%s", WEB_SHARED_PASSWORD);
+  if (strcmp(password, "change-me") == 0)
+    (void)DebugLog_Printf("WEB: WARNING shared password is still the template value\r\n");
+  else
+    (void)DebugLog_Printf("WEB: shared password from web_secrets.h\r\n");
+#else
+  /* No web_secrets.h: per-board fallback. Different salt from the MAC derivation
+   * so the MAC does not reveal it. */
   uint32_t uid[3] = {HAL_GetUIDw0(), HAL_GetUIDw1(), HAL_GetUIDw2()};
   const uint8_t *p = (const uint8_t *)uid;
   uint64_t h = 0xcbf29ce484222325ULL ^ 0x5353574542504157ULL;  /* "SSWEBPAW" */
   for (unsigned int i = 0; i < sizeof(uid); i++) { h ^= p[i]; h *= 0x100000001b3ULL; }
   (void)snprintf(password, sizeof(password), "ss-%08lx", (unsigned long)(h >> 24));
-  (void)DebugLog_Printf("WEB: bench password %s (derived from UID; change arrives with Storage)\r\n", password);
+  (void)DebugLog_Printf("WEB: no web_secrets.h, per-board password %s\r\n", password);
+#endif
 }
 
 static bool equalConstTime(const char *a, const char *b)

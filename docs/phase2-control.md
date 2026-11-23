@@ -18,9 +18,11 @@ Branch `feature/phase2-control`. Design: `docs/architecture/tasks/control.md`.
 
 ## Web sign-in (bench version)
 
-- Password is derived from the STM32 UID (unique per board) and printed on the serial
-  console at boot: `WEB: bench password ss-xxxxxxxx`. A stored, changeable password comes
-  with the Storage service.
+- One shared password for every board, from the untracked `Core/Inc/web_secrets.h`
+  (template `web_secrets.example.h`; see `docs/web-status-api.md`). Without that file each
+  board falls back to a UID-derived password printed on the serial console at boot
+  (`WEB: no web_secrets.h, per-board password ss-xxxxxxxx`). A stored, changeable password
+  comes with the Storage service.
 - `POST /api/login` returns a 128-bit random session token (STM32 RNG). Every state-changing
   request carries it in the JSON body as `token` (a cross-site page cannot read or forge it).
   Sessions expire after 30 min idle; 4 sessions max.

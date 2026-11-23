@@ -7,3 +7,6 @@
 *.launch
 *.swp
 *.tmp
+
+# Shared web password (never commit)
+/F407_smartswitch/Core/Inc/web_secrets.h

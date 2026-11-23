@@ -20,9 +20,13 @@ Design draft 2026-11-23; firmware side not implemented. The page has four tabs:
 
 ## Authentication (implemented in Phase 2, bench version)
 
-- One password per board. **Now:** derived from the STM32 UID and printed on the serial
-  console at boot (`WEB: bench password ss-xxxxxxxx`). **Later (Storage):** stored as a
-  salted hash in config, changeable, forced change on first use.
+- **One shared password for all boards** (owner decision 2026-11-23, for field staff
+  convenience). It is set at build time in `Core/Inc/web_secrets.h`, which is **not in git**
+  (`.gitignore`); copy `web_secrets.example.h`, set 8–15 characters, rebuild. After creating
+  or changing the file do a clean build (or touch `web_auth.c`): make does not track it.
+  The value is never logged. Without the file the firmware falls back to a per-board password
+  derived from the STM32 UID and prints it on the serial console. **Later (Storage):** the
+  shared password can be provisioned and changed without rebuilding (stored as a salted hash).
 - `POST /api/login {password}` → `{csrf: <32 hex>}` (random, STM32 RNG). Every POST after
   sign-in carries it as `token` in the JSON body (the page adds it automatically); missing or
   expired → 401. Sessions: 4 max, 30 min idle. No cookie.
