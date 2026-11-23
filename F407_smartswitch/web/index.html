@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartSwitch</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--fg:#1d2330;--muted:#667085;--line:#e3e6ea;--ok:#127a3a;--okbg:#e5f4ea;--warn:#9a5b00;--warnbg:#fdf1dc;--bad:#b42318;--badbg:#fde8e7;--info:#1f5fae;--infobg:#e6eefa;--acc:#1f5fae;--mono:ui-monospace,Consolas,"Courier New",monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#14171c;--card:#1d2128;--fg:#e6e8eb;--muted:#9aa3ae;--line:#2c323b;--ok:#5fd18a;--okbg:#17321f;--warn:#f0b35a;--warnbg:#3a2a10;--bad:#ff8a80;--badbg:#3d1b1a;--info:#8ab4f8;--infobg:#1a2a44;--acc:#8ab4f8}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:10px 24px;background:var(--card);border-bottom:1px solid var(--line)}
+header h1{font-size:18px;margin:0;font-weight:600}
+nav{display:flex;gap:4px;margin-left:12px}
+nav a{padding:6px 12px;border-radius:6px;color:var(--muted);text-decoration:none;font-weight:500}
+nav a.on{background:var(--infobg);color:var(--info)}
+.sub{color:var(--muted);font-size:13px}
+.sp{flex:1}
+main{max-width:1280px;margin:0 auto;padding:20px 24px 32px}
+.view{display:grid;gap:16px}
+.row{display:grid;gap:16px}
+.r4{grid-template-columns:repeat(4,1fr)}.r3{grid-template-columns:repeat(3,1fr)}.r2{grid-template-columns:2fr 1fr}.r11{grid-template-columns:1fr 1fr}
+@media (max-width:900px){.r4{grid-template-columns:repeat(2,1fr)}.r3,.r2,.r11{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card h2{font-size:13px;font-weight:600;margin:0 0 10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;display:flex;align-items:center;gap:8px}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{color:var(--ok);background:var(--okbg)}.warn{color:var(--warn);background:var(--warnbg)}.bad{color:var(--bad);background:var(--badbg)}.info{color:var(--info);background:var(--infobg)}.neutral{color:var(--muted);background:var(--bg)}
+.ch{font-size:16px;font-weight:600}
+.big{margin:8px 0 2px}.big .badge{font-size:18px;padding:5px 14px;border-radius:8px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0}
+.kv dt{color:var(--muted)}.kv dd{margin:0;font-family:var(--mono);text-align:right}
+.note{color:var(--muted);font-size:12px;margin:8px 0 0}
+.banner{padding:10px 14px;border-radius:8px;font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:500}
+td.n,th.n{text-align:right;font-family:var(--mono)}
+.bar{height:6px;background:var(--bg);border-radius:3px;overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:var(--info)}
+.stale #v-status{opacity:.55}
+button{font:inherit;padding:7px 14px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer;font-weight:500}
+button:hover:not(:disabled){border-color:var(--muted)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+@media (prefers-color-scheme:dark){button.pri{color:#0f1720}}
+button.danger{color:var(--bad);border-color:var(--bad)}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;align-items:center}
+input,select{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
+input[type=number]{width:72px}
+label.f{display:grid;gap:4px;margin-bottom:10px;color:var(--muted);font-size:13px}
+label.f input,label.f select{color:var(--fg);font-family:var(--mono)}
+.err{color:var(--bad);font-size:13px;min-height:18px;margin:4px 0 0}
+.steps{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.steps span{padding:4px 10px;border-radius:999px;font-size:12px;background:var(--bg);color:var(--muted)}
+.steps span.done{background:var(--okbg);color:var(--ok)}.steps span.cur{background:var(--infobg);color:var(--info)}.steps span.fail{background:var(--badbg);color:var(--bad)}
+#modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);align-items:center;justify-content:center;z-index:9}
+#modal.open{display:flex}
+#modal .card{width:min(420px,92vw)}
+#modal h3{margin:0 0 8px;font-size:16px}
+</style>
+</head>
+<body>
+<header>
+  <h1>SmartSwitch</h1>
+  <nav>
+    <a href="#status" data-v="status">Status</a>
+    <a href="#relays" data-v="relays">Relays</a>
+    <a href="#network" data-v="network">Network</a>
+    <a href="#firmware" data-v="firmware">Firmware</a>
+  </nav>
+  <span class="sp"></span>
+  <span class="sub" id="hdr-id">—</span>
+  <span class="badge neutral" id="conn">Connecting…</span>
+  <button id="authbtn">Sign in</button>
+</header>
+<main>
+  <section class="view" id="v-status">
+    <div class="row r4" id="relays"></div>
+    <p class="note" style="margin:-6px 0 0">Relay cards show the PCA9536 latch read-back only. LOW = coil off = load on (NC contacts). Contact state is not measured yet.</p>
+    <div class="row r3">
+      <div class="card"><h2>Power inputs <span class="badge warn">raw</span></h2><dl class="kv" id="power"></dl>
+        <p class="note">Polarity of Vin_Detect is not verified yet (open item H2). Values are GPIO levels, not interpreted states.</p></div>
+      <div class="card"><h2>Battery</h2><dl class="kv" id="battery"></dl><div class="bar"><i id="vbat-bar" style="width:0"></i></div>
+        <p class="note">Estimate from nominal 3.000 V reference and divider; not calibrated.</p></div>
+      <div class="card"><h2>AC sense diagnostics <span class="badge warn">raw</span></h2><dl class="kv" id="diag"></dl>
+        <p class="note">AMC3330 DIAG pins. Low means channel data unusable. AC voltage readings arrive with the Acquisition service.</p></div>
+    </div>
+    <div class="row r3">
+      <div class="card"><h2>Network</h2><dl class="kv" id="net"></dl></div>
+      <div class="card"><h2>SPI flash</h2><dl class="kv" id="flash"></dl></div>
+      <div class="card"><h2>Debug log</h2><dl class="kv" id="log"></dl></div>
+    </div>
+    <div class="row r2">
+      <div class="card"><h2>Tasks</h2><table><thead><tr><th>Name</th><th class="n">Priority</th><th class="n">Stack free (words)</th></tr></thead><tbody id="tasks"></tbody></table></div>
+      <div class="card"><h2>System</h2><dl class="kv" id="sys"></dl><div class="bar"><i id="heap-bar" style="width:0"></i></div><p class="note">Bar = heap currently in use.</p></div>
+    </div>
+  </section>
+
+  <section class="view" id="v-relays" hidden>
+    <div class="banner warn">Draft. Relay commands go through the Control service (architecture Phase 2). On firmware without it, the buttons stay disabled.</div>
+    <div class="banner info" id="relay-auth">Sign in to send relay commands. Turning a load OFF or power-cycling it asks for your password again.</div>
+    <div class="row r4" id="relay-ctl"></div>
+    <div class="card"><h2>Recent commands</h2>
+      <table><thead><tr><th>ID</th><th>Time</th><th>Channel</th><th>Command</th><th>Source</th><th>Outcome</th></tr></thead><tbody id="outcomes"><tr><td colspan="6" class="sub">No commands yet.</td></tr></tbody></table>
+      <p class="note">A command is accepted first and applied afterwards. A browser disconnect does not mean the command failed: check this list.</p>
+    </div>
+  </section>
+
+  <section class="view" id="v-network" hidden>
+    <div class="row r11">
+      <div class="card"><h2>Current</h2><dl class="kv" id="net2"></dl>
+        <p class="note">Recommended: keep DHCP and create a static lease for this MAC on the router (RUTM51).</p></div>
+      <div class="card"><h2>Settings</h2>
+        <label class="f">Address mode<select id="nm"><option value="dhcp">DHCP (static fallback if no lease)</option><option value="static">Static IP</option></select></label>
+        <div id="nstatic">
+          <label class="f">IP address<input id="nip" placeholder="192.168.1.10"></label>
+          <label class="f">Netmask<input id="nmask" placeholder="255.255.255.0"></label>
+          <label class="f">Gateway<input id="ngw" placeholder="192.168.1.1"></label>
+          <label class="f">DNS<input id="ndns" placeholder="192.168.1.1"></label>
+        </div>
+        <p class="err" id="nerr"></p>
+        <div class="btns"><button class="pri" id="napply">Apply…</button><span class="sub" id="nstate"></span></div>
+        <p class="note">Safe apply: the board switches to the new settings and keeps the old ones for 120 s. Open the new address and press Confirm there; otherwise it reverts automatically. Fallback access: serial console.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="v-firmware" hidden>
+    <div class="banner warn">Draft only. Firmware update needs the bootloader and storage partitions (architecture Phase 5). Nothing on this page works on the current firmware.</div>
+    <div class="row r11">
+      <div class="card"><h2>Running</h2><dl class="kv" id="fwrun"></dl></div>
+      <div class="card"><h2>Staging slot (W25Q128 chip 2)</h2><dl class="kv" id="fwslot"></dl></div>
+    </div>
+    <div class="card"><h2>Update</h2>
+      <div class="steps" id="fwsteps"></div>
+      <div class="btns"><input type="file" id="fwfile" accept=".bin"><button class="pri" id="fwup">Upload</button><button id="fwapply" disabled>Apply and reboot…</button></div>
+      <div class="bar"><i id="fwbar" style="width:0"></i></div>
+      <p class="err" id="fwerr"></p>
+      <p class="note">Upload writes the image to the staging slot and verifies it (size, CRC, signature). Apply reboots into the bootloader, which copies the image and keeps a rollback copy. If the new firmware does not confirm itself after boot, the bootloader restores the previous one. Relay states are preserved across the reboot.</p>
+    </div>
+    <div class="card"><h2>History</h2><table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Result</th></tr></thead><tbody id="fwhist"></tbody></table></div>
+  </section>
+</main>
+
+<div id="modal"><div class="card"><h3 id="mt"></h3><div id="mb"></div>
+  <label class="f" id="mpw-l" style="margin-top:10px">Password<input type="password" id="mpw" autocomplete="current-password"></label>
+  <p class="err" id="merr"></p>
+  <div class="btns" style="justify-content:flex-end"><button id="mcancel">Cancel</button><button class="pri" id="mok">OK</button></div>
+</div></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const badge = (t, c) => `<span class="badge ${c}">${esc(t)}</span>`;
+const kv = rows => rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
+const lvl = v => v == null ? badge("n/a", "neutral") : badge(v ? "HIGH (1)" : "LOW (0)", "neutral");
+const okb = ok => ok ? badge("OK", "ok") : badge("ERROR", "bad");
+const now = () => new Date().toLocaleTimeString();
+const ipOk = s => /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(s);
+function uptime(ms) {
+  const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return (d ? d + "d " : "") + [h, m, s % 60].map(x => String(x).padStart(2, "0")).join(":");
+}
+
+const useMock = !/^https?:$/.test(location.protocol) || new URLSearchParams(location.search).has("mock");
+const S = { auth: false, csrf: null, data: null, outcomes: [] };
+
+function relayState(r, ch) {
+  const bit = 1 << ch;
+  if (!r.ok) return ["UNKNOWN", "bad", "I2C error " + esc(r.err) + " — state not confirmed"];
+  if (r.config & bit) return ["LOAD ON", "ok", "Pin is input (expander default) — coil off"];
+  if (r.output & bit) return ["LOAD OFF", "warn", "Latch HIGH — coil commanded on"];
+  return ["LOAD ON", "ok", "Latch LOW — coil off"];
+}
+
+function renderStatus(d) {
+  $("hdr-id").textContent = `${d.net.mac} · ${d.net.ip || "no IP"} · fw ${d.fw.build}`;
+  $("relays").innerHTML = [0, 1, 2, 3].map(ch => { const [m, c, t] = relayState(d.relay, ch);
+    return `<div class="card"><div class="ch">CH${ch + 1}</div><div class="big">${badge(m, c)}</div><p class="note">${t}</p></div>`; }).join("");
+  $("power").innerHTML = kv([["Vin_Detect (PB3)", lvl(d.power.vin_detect)], ["eFuse_iLim (PB9)", lvl(d.power.efuse_ilim)],
+    ["Batt CHRG (PE13)", lvl(d.power.chrg)], ["Batt FAULT (PE11)", lvl(d.power.fault)]]);
+  const vb = d.vbat;
+  $("battery").innerHTML = kv([["ADC raw (IN13)", vb.ok ? vb.raw : badge("n/a", "bad")],
+    ["Estimated", vb.ok ? (vb.mv_est / 1000).toFixed(2) + " V" : "—"], ["Pack", "LiFePO4 2S"]]);
+  $("vbat-bar").style.width = vb.ok ? Math.max(0, Math.min(100, (vb.mv_est - 5600) / 17)) + "%" : "0";
+  $("diag").innerHTML = kv(d.amc_diag.map((v, i) => [`DIAG_S${i + 1}`, v == null ? badge("n/a", "neutral") : v ? badge("OK (1)", "ok") : badge("LOW (0)", "bad")]));
+  const n = d.net, netRows = [["Link", n.link ? badge("UP", "ok") : badge("DOWN", "bad")], ["Address mode", esc(n.mode.toUpperCase())],
+    ["IP", esc(n.ip || "—")], ["Netmask", esc(n.mask || "—")], ["Gateway", esc(n.gw || "—")], ["MAC", esc(n.mac)], ["PHY ID", esc(n.phy_id)]];
+  $("net").innerHTML = kv(netRows); $("net2").innerHTML = kv(netRows);
+  $("flash").innerHTML = kv(d.flash.flatMap((f, i) => [[`Chip ${i + 1} (CS${i + 1})`, okb(f.ok)], [`Chip ${i + 1} JEDEC`, esc(f.jedec || "—")]]));
+  const l = d.sys.log;
+  $("log").innerHTML = kv([["Queued bytes", l.queued], ["High-water bytes", l.high], ["Dropped messages", l.dropped ? badge(l.dropped, "warn") : 0],
+    ["DMA start errors", l.dma_start_err], ["DMA transfer errors", l.dma_xfer_err]]);
+  $("tasks").innerHTML = d.sys.tasks.map(t => `<tr><td>${esc(t.name)}</td><td class="n">${t.prio}</td><td class="n">${t.stack_free < 64 ? badge(t.stack_free, "bad") : t.stack_free}</td></tr>`).join("");
+  const s = d.sys;
+  $("sys").innerHTML = kv([["Uptime", uptime(d.fw.uptime_ms)], ["Heap free", s.heap_free + " B"], ["Heap minimum ever", s.heap_min + " B"],
+    ["Heap total", s.heap_total + " B"], ["Firmware build", esc(d.fw.build)]]);
+  $("heap-bar").style.width = (100 - s.heap_free / s.heap_total * 100).toFixed(1) + "%";
+}
+
+function renderRelayCtl() {
+  const d = S.data; if (!d) return;
+  const can = S.auth && d.control && d.control.available, coil = d.control ? d.control.coil_supply : false;
+  $("relay-auth").hidden = S.auth;
+  $("relay-ctl").innerHTML = [0, 1, 2, 3].map(ch => {
+    const [m, c, t] = relayState(d.relay, ch), cyc = d.control && d.control.cycle_remaining_s ? d.control.cycle_remaining_s[ch] : 0;
+    return `<div class="card"><div class="ch">CH${ch + 1}</div><div class="big">${badge(m, c)}</div>
+      <p class="note">${cyc ? "Power-cycle: " + cyc + " s left" : t}</p>
+      <div class="btns"><button data-a="SET_ON" data-ch="${ch}" ${can ? "" : "disabled"}>On</button>
+      <button class="danger" data-a="SET_OFF" data-ch="${ch}" ${can && coil ? "" : "disabled"}>Off</button></div>
+      <div class="btns"><button class="danger" data-a="POWER_CYCLE" data-ch="${ch}" ${can && coil ? "" : "disabled"}>Power-cycle</button>
+      <input type="number" id="dur${ch}" min="1" max="600" value="10" aria-label="Duration in seconds"> s</div></div>`; }).join("") +
+    (d.control && !coil ? `<p class="note" style="grid-column:1/-1">No 24 V coil supply: OFF and power-cycle are rejected (loads are already on).</p>` : "");
+}
+
+function renderOutcomes() {
+  if (!S.outcomes.length) return;
+  const cls = { PENDING: "info", APPLIED: "ok", FAILED: "bad", SUPERSEDED: "neutral", UNKNOWN: "bad", REJECTED: "bad" };
+  $("outcomes").innerHTML = S.outcomes.slice(0, 12).map(o => `<tr><td class="n">${o.id ?? "—"}</td><td>${o.t}</td><td>CH${o.ch + 1}</td>
+    <td>${esc(o.cmd)}</td><td>WEB</td><td>${badge(o.state + (o.reason ? " · " + o.reason : ""), cls[o.state] || "neutral")}</td></tr>`).join("");
+}
+
+let modalOk = null;
+function openModal(title, body, okLabel, needPw, onOk) {
+  $("mt").textContent = title; $("mb").innerHTML = body; $("mok").textContent = okLabel;
+  $("mpw-l").hidden = !needPw; $("mpw").value = ""; $("merr").textContent = "";
+  modalOk = onOk; $("modal").classList.add("open"); if (needPw) $("mpw").focus();
+}
+const closeModal = () => { $("modal").classList.remove("open"); modalOk = null; };
+$("mcancel").onclick = closeModal;
+$("mpw").oninput = () => $("merr").textContent = "";
+$("mok").onclick = async () => {
+  if (!$("mpw-l").hidden && !$("mpw").value) { $("merr").textContent = "Enter your password first"; return; }
+  const msg = await modalOk($("mpw").value);
+  if (msg) $("merr").textContent = msg; else closeModal();
+};
+
+async function api(method, path, body) {
+  if (useMock) return mockApi(method, path, body);
+  const r = await fetch(path, { method, cache: "no-store", headers: { "Content-Type": "application/json", ...(S.csrf ? { "X-CSRF-Token": S.csrf } : {}) },
+    body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(j.error || r.status), { status: r.status, body: j });
+  return j;
+}
+
+function setAuth(on, csrf) { S.auth = on; S.csrf = csrf || null; $("authbtn").textContent = on ? "Sign out" : "Sign in"; renderRelayCtl(); }
+$("authbtn").onclick = () => {
+  if (S.auth) { api("POST", "/api/logout").finally(() => setAuth(false)); return; }
+  openModal("Sign in", `<p class="sub">Required for relay commands, network settings and firmware update.</p>`, "Sign in", true, async pw => {
+    try { const j = await api("POST", "/api/login", { password: pw }); setAuth(true, j.csrf); }
+    catch (e) { return e.status === 429 ? "Too many attempts. Wait and try again." : "Wrong password"; }
+  });
+};
+
+$("relay-ctl").onclick = e => {
+  const b = e.target.closest("button[data-a]"); if (!b) return;
+  const ch = +b.dataset.ch, type = b.dataset.a;
+  let duration = 0;
+  if (type === "POWER_CYCLE") { duration = +$("dur" + ch).value; if (!(duration >= 1 && duration <= 600)) { alert("Duration must be 1–600 s"); return; } }
+  const label = { SET_ON: "Turn load ON", SET_OFF: "Turn load OFF", POWER_CYCLE: `Power-cycle for ${duration} s` }[type];
+  const needPw = type !== "SET_ON";
+  const body = `<p>CH${ch + 1}: <b>${esc(label)}</b></p>` + (needPw ? `<p class="sub">The connected equipment loses power. Enter your password to confirm.</p>` : "");
+  openModal("Confirm relay command", body, label, needPw, async pw => {
+    const o = { t: now(), ch, cmd: label, state: "PENDING" };
+    try {
+      const j = await api("POST", "/api/relay", { type, channel_mask: 1 << ch, duration_s: duration, password: needPw ? pw : undefined });
+      o.id = j.request_id; S.outcomes.unshift(o); renderOutcomes(); pollOutcome(o);
+    } catch (e) {
+      if (e.status === 403) return "Wrong password";
+      o.state = "REJECTED"; o.reason = (e.body && e.body.reason) || e.message; S.outcomes.unshift(o); renderOutcomes();
+    }
+  });
+};
+async function pollOutcome(o) {
+  for (let i = 0; i < 20 && o.state === "PENDING"; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    try { const j = await api("GET", "/api/relay/outcome?id=" + o.id); o.state = j.state; } catch (e) { }
+    renderOutcomes();
+  }
+}
+
+function syncNetForm() { $("nstatic").hidden = $("nm").value !== "static"; }
+$("nm").onchange = () => { syncNetForm(); $("nerr").textContent = ""; };
+["nip", "nmask", "ngw", "ndns"].forEach(id => $(id).oninput = () => $("nerr").textContent = "");
+$("napply").onclick = () => {
+  if (!S.auth) { $("nerr").textContent = "Sign in first"; return; }
+  const cfg = { mode: $("nm").value };
+  if (cfg.mode === "static") {
+    for (const [id, name] of [["nip", "IP address"], ["nmask", "Netmask"], ["ngw", "Gateway"]])
+      if (!ipOk($(id).value.trim())) { $("nerr").textContent = name + " is not a valid IPv4 address"; return; }
+    if ($("ndns").value.trim() && !ipOk($("ndns").value.trim())) { $("nerr").textContent = "DNS is not a valid IPv4 address"; return; }
+    Object.assign(cfg, { ip: $("nip").value.trim(), mask: $("nmask").value.trim(), gw: $("ngw").value.trim(), dns: $("ndns").value.trim() });
+  }
+  const dest = cfg.mode === "static" ? cfg.ip : "the address the router assigns";
+  openModal("Apply network settings", `<p>New mode: <b>${cfg.mode.toUpperCase()}</b>${cfg.ip ? " · " + esc(cfg.ip) : ""}</p>
+    <p class="sub">This page will lose its connection. Open ${esc(dest)} within 120 s and press Confirm, or the board reverts.</p>`, "Apply", true, async pw => {
+    try { await api("POST", "/api/network", { ...cfg, password: pw }); $("nstate").textContent = "Applied — waiting for confirmation from the new address (120 s)"; }
+    catch (e) { return e.status === 403 ? "Wrong password" : "Rejected: " + ((e.body && e.body.error) || e.message); }
+  });
+};
+
+const FW_STEPS = ["Upload", "Verify", "Ready", "Reboot", "Boot check", "Committed"];
+function renderFw(f) {
+  $("fwrun").innerHTML = kv([["Application", esc(f.running.version)], ["Build", esc(f.running.build)], ["Bootloader", esc(f.bootloader)],
+    ["Confirmed", f.running.confirmed ? badge("YES", "ok") : badge("PENDING", "warn")]]);
+  $("fwslot").innerHTML = kv([["State", badge(f.slot.state, f.slot.state === "VALID" ? "ok" : f.slot.state === "INVALID" ? "bad" : "neutral")],
+    ["Version", esc(f.slot.version || "—")], ["Size", f.slot.size ? f.slot.size + " B" : "—"], ["CRC / signature", esc(f.slot.check || "—")]]);
+  $("fwsteps").innerHTML = FW_STEPS.map((s, i) => `<span class="${i < f.step ? "done" : i === f.step ? (f.failed ? "fail" : "cur") : ""}">${s}</span>`).join("");
+  $("fwapply").disabled = !(S.auth && f.slot.state === "VALID");
+  $("fwhist").innerHTML = f.history.map(h => `<tr><td>${esc(h.t)}</td><td>${esc(h.from)}</td><td>${esc(h.to)}</td><td>${badge(h.result, h.result === "COMMITTED" ? "ok" : "bad")}</td></tr>`).join("");
+}
+$("fwfile").onchange = () => $("fwerr").textContent = "";
+$("fwup").onclick = async () => {
+  if (!S.auth) { $("fwerr").textContent = "Sign in first"; return; }
+  const file = $("fwfile").files[0];
+  if (!file) { $("fwerr").textContent = "Choose a .bin file first"; return; }
+  if (!file.name.endsWith(".bin")) { $("fwerr").textContent = "File must be a .bin image"; return; }
+  try { await api("POST", "/api/fw/upload", { name: file.name, size: file.size }); } catch (e) { $("fwerr").textContent = "Upload failed: " + e.message; }
+};
+$("fwapply").onclick = () => openModal("Apply firmware", `<p>The board reboots into the new firmware. Relay states are kept. If it does not confirm itself, the previous firmware is restored.</p>`,
+  "Apply and reboot", true, async pw => { try { await api("POST", "/api/fw/apply", { password: pw }); } catch (e) { return e.status === 403 ? "Wrong password" : e.message; } });
+
+const VIEWS = ["status", "relays", "network", "firmware"];
+let view = "status";
+function show(v) {
+  view = VIEWS.includes(v) ? v : "status";
+  for (const n of VIEWS) $("v-" + n).hidden = n !== view;
+  document.querySelectorAll("nav a").forEach(a => a.classList.toggle("on", a.dataset.v === view));
+  if (view === "firmware") api("GET", "/api/fw/status").then(renderFw).catch(() => {});
+}
+document.querySelector("nav").onclick = e => {
+  const a = e.target.closest("a[data-v]"); if (!a) return;
+  e.preventDefault(); show(a.dataset.v);
+  try { history.replaceState(null, "", "#" + view); } catch (err) { }
+};
+
+const M = { t0: Date.now(), output: 0x02, cycles: [0, 0, 0, 0], outcomes: {}, nextId: 101,
+  fw: { running: { version: "0.5.0", build: "mock-0.5", confirmed: true }, bootloader: "0.1.0",
+        slot: { state: "EMPTY" }, step: -1, failed: false, history: [{ t: "2026-11-20 14:02", from: "0.4.2", to: "0.5.0", result: "COMMITTED" }] } };
+function mockStatus() {
+  const t = Date.now() - M.t0, on24 = Math.floor(t / 20000) % 2 === 0;
+  for (let ch = 0; ch < 4; ch++) if (M.cycles[ch] && Date.now() >= M.cycles[ch]) { M.cycles[ch] = 0; M.output &= ~(1 << ch); }
+  if (!on24) { M.output = 0; M.cycles = [0, 0, 0, 0]; }
+  return {
+    fw: { build: "mock-0.5", uptime_ms: 8500 + t },
+    net: { link: true, mode: "dhcp", ip: "192.168.1.10", mask: "255.255.255.0", gw: "192.168.1.1", mac: "06:3A:1F:52:9C:04", phy_id: "0007:C131" },
+    relay: { ok: true, err: 0, output: M.output, input: 0xF0 | M.output, config: 0xF0 },
+    control: { available: true, coil_supply: on24, cycle_remaining_s: M.cycles.map(c => c ? Math.ceil((c - Date.now()) / 1000) : 0) },
+    power: { vin_detect: on24 ? 1 : 0, efuse_ilim: on24 ? 1 : 0, chrg: 1, fault: 1 },
+    vbat: { ok: true, raw: 3207 + (t / 1000 % 3 | 0), mv_est: 6553 },
+    amc_diag: [1, 1, 1, 0],
+    flash: [{ ok: true, jedec: "EF 40 18" }, { ok: true, jedec: "EF 40 18" }],
+    sys: { heap_free: 24800, heap_min: 15912, heap_total: 32768, log: { queued: 0, high: 412, dropped: 0, dma_start_err: 0, dma_xfer_err: 0 },
+      tasks: [{ name: "defaultTask", prio: 24, stack_free: 180 }, { name: "debugRx", prio: 25, stack_free: 310 }, { name: "debugTx", prio: 2, stack_free: 120 },
+              { name: "netTask", prio: 18, stack_free: 413 }, { name: "httpServer", prio: 16, stack_free: 52 }] },
+  };
+}
+async function mockApi(method, path, b) {
+  await new Promise(r => setTimeout(r, 150));
+  const fail = (status, error, reason) => { throw Object.assign(new Error(error), { status, body: { error, reason } }); };
+  const pwOk = pw => pw === "demo";
+  if (path === "/api/status") return mockStatus();
+  if (path === "/api/login") { if (!pwOk(b.password)) fail(403, "bad password"); return { csrf: "mock-csrf" }; }
+  if (path === "/api/logout") return {};
+  if (path === "/api/relay") {
+    if (b.password !== undefined && !pwOk(b.password)) fail(403, "bad password");
+    const st = mockStatus(), ch = Math.log2(b.channel_mask);
+    if (b.type !== "SET_ON" && !st.control.coil_supply) fail(409, "rejected", "NO_COIL_SUPPLY");
+    const id = M.nextId++; M.outcomes[id] = { state: "PENDING", at: Date.now() + 600 };
+    for (const o of Object.values(M.outcomes)) if (o.ch === ch && o.state === "PENDING" && o !== M.outcomes[id]) o.state = "SUPERSEDED";
+    M.outcomes[id].ch = ch;
+    setTimeout(() => { if (M.outcomes[id].state !== "PENDING") return;
+      if (b.type === "SET_ON") { M.output &= ~b.channel_mask; M.cycles[ch] = 0; }
+      if (b.type === "SET_OFF") { M.output |= b.channel_mask; M.cycles[ch] = 0; }
+      if (b.type === "POWER_CYCLE") { M.output |= b.channel_mask; M.cycles[ch] = Date.now() + b.duration_s * 1000; }
+      M.outcomes[id].state = "APPLIED"; }, 600);
+    return { request_id: id };
+  }
+  if (path.startsWith("/api/relay/outcome")) return { state: M.outcomes[+path.split("=")[1]].state };
+  if (path === "/api/network") { if (!pwOk(b.password)) fail(403, "bad password"); return {}; }
+  if (path === "/api/fw/status") return M.fw;
+  if (path === "/api/fw/upload") {
+    M.fw.step = 0; M.fw.failed = false; M.fw.slot = { state: "WRITING" }; let p = 0;
+    const iv = setInterval(() => { p += 10; $("fwbar").style.width = p + "%";
+      if (p >= 100) { clearInterval(iv); M.fw.step = 2; M.fw.slot = { state: "VALID", version: "0.6.0", size: b.size, check: "CRC OK · signature OK" }; } else if (p > 80) M.fw.step = 1; }, 300);
+    return {};
+  }
+  if (path === "/api/fw/apply") { if (!pwOk(b.password)) fail(403, "bad password"); M.fw.step = 3; return {}; }
+  fail(404, "not found");
+}
+
+let failures = 0;
+function setConn(t, c) { const e = $("conn"); e.textContent = t; e.className = "badge " + c; }
+async function tick() {
+  try {
+    const d = await Promise.race([api("GET", "/api/status"), new Promise((_, r) => setTimeout(() => r(new Error("timeout")), 2500))]);
+    S.data = d; renderStatus(d); renderRelayCtl();
+    if (view === "firmware") { try { renderFw(await api("GET", "/api/fw/status")); } catch (e) { } }
+    failures = 0; document.body.classList.remove("stale"); setConn(useMock ? "Mock data · password: demo" : "Live", useMock ? "warn" : "ok");
+  } catch (e) { if (++failures >= 2) { document.body.classList.add("stale"); setConn("Disconnected", "bad"); } }
+}
+syncNetForm(); show(location.hash.slice(1)); tick(); setInterval(tick, 1000);
+</script>
+</body>
+</html>
