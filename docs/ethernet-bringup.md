@@ -9,10 +9,16 @@ link down; reconnect restored link and ping; software reset with cable attached
 restored ping. A 301-packet ping run passed with 0% loss, maximum reported
 round-trip 29 ms. Power-cycle and hardware fault recovery remain untested.
 
-The test setup uses the PC at `192.168.0.222/24`, board static IP
-`192.168.0.223/24`, and locally administered test MAC `02:00:00:00:00:01`.
-These are temporary bring-up settings, not unique production configuration.
-From the PC: `ping 192.168.0.223`. USART6 debug reports PHY ID and link state.
+The 2026-11-19 tests used the PC at `192.168.0.222/24`, board static IP
+`192.168.0.223/24`, and MAC `02:00:00:00:00:01`.
+
+**Changed on branch `feature/status-web` (bench-tested 2026-11-23 with a direct PC
+cable; DHCP with a real server not yet tested):** the MAC
+is derived from the STM32 UID (logged at boot), the board requests DHCP and falls
+back to static `192.168.0.223/24` if no lease arrives within 10 s, the TCP echo
+test is no longer started, and the read-only status web runs on port 80. See
+`docs/web-status-api.md`. With a direct PC cable, wait for the fallback log line,
+then `ping 192.168.0.223` or open `http://192.168.0.223/`.
 
 `Core/Src/eth_probe.c` enables PE0, waits for the PHY, uses HAL to initialize
 and read MDIO, then deinitializes HAL before CycloneTCP initializes and owns

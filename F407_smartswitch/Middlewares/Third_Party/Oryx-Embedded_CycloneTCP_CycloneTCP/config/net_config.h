@@ -1388,4 +1388,11 @@
    #define CHAP_SUPPORT DISABLED
 #endif
 
+/* SmartSwitch project overrides (not generated). Re-check after CubeMX
+ * regeneration; see docs/web-status-api.md. */
+#define HTTP_SERVER_GZIP_TYPE_SUPPORT ENABLED  /* serve <uri>.gz from res.c */
+#define HTTP_SERVER_MAX_CONNECTIONS 2          /* heap budget */
+#define HTTP_SERVER_BUFFER_SIZE 1024
+#define HTTP_SERVER_STACK_SIZE 700             /* words, per connection task */
+
 #endif
