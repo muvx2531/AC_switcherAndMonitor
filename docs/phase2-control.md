@@ -42,7 +42,10 @@ channels `ON`. Serial `GET` and `SET 0` returned `OK,0,0,0`. Heap minimum 22.3 K
 
 ## Not yet tested (needs someone at the board, only when energizing coils is safe)
 
-1. Relay operation H1: web OFF / ON on one channel; listen or measure the contact.
+1. ~~Relay operation H1~~ — **done 2026-11-23:** the owner switched CH3 OFF/ON from the web
+   and confirmed the relay operates. A later reflash (pin reset) booted with
+   `CTRL: start latch=4`: CH3 stayed OFF across the reset (I1). CH1, CH2, CH4 not yet
+   checked one by one.
 2. Power-cycle 10 s: load off, back on after 10 s; outcome `APPLIED`; `cycle_remaining_s` counts down.
 3. Supersede: start a 60 s cycle, then ON → load on at once, old request `SUPERSEDED`.
 4. Reset during a cycle: start 60 s, reset the board → log `pending power-cycle ... resumed`, load
