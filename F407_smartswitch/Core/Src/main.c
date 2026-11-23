@@ -23,7 +23,12 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "debug_log.h"
+#include "eth_probe.h"
+#include "w25q128.h"
+#include "flash_dma_test.h"
+#include "pca9536.h"
+#include "debug_protocol.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -82,7 +87,9 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
-
+volatile uint32_t flashTestRequest;
+volatile uint32_t relay3TestRequest;
+volatile uint32_t relayPatternRequest;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -221,7 +228,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.LSEState = RCC_LSE_BYPASS;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 25;
+  RCC_OscInitStruct.PLL.PLLM = 16;
   RCC_OscInitStruct.PLL.PLLN = 336;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 7;
@@ -387,7 +394,8 @@ static void MX_ETH_Init(void)
 {
 
   /* USER CODE BEGIN ETH_Init 0 */
-
+  /* Defer Ethernet until the PHY power and reference clock are verified. */
+  return;
   /* USER CODE END ETH_Init 0 */
 
    static uint8_t MACAddr[6];
@@ -860,10 +868,78 @@ static void MX_GPIO_Init(void)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
+  /* Both USART6 users register per-handle HAL callbacks, which HAL accepts only
+   * while TX is idle: start both before the first log message is queued. */
+  (void) DebugLog_Init(&huart6);
+  bool protocolReady = DebugProtocol_Start(&huart6);
+  PCA9536_Registers pcaBefore, pcaAfter;
+  I2cBusResult i2cResult = I2cBus_Init(&hi2c1);
+  if (i2cResult == I2C_BUS_OK) i2cResult = PCA9536_InitOutputsKeepState(&pcaBefore, &pcaAfter);
+  if (i2cResult == I2C_BUS_OK)
+    (void) DebugLog_Printf("PCA9536: boot config=%X latch=%X -> config=%X latch=%X\r\n",
+        pcaBefore.config & 0x0fU, pcaBefore.output & 0x0fU,
+        pcaAfter.config & 0x0fU, pcaAfter.output & 0x0fU);
+  else
+    (void) DebugLog_Printf("PCA9536: startup failed result=%u HAL=0x%08lX; state unknown\r\n", i2cResult, (unsigned long)I2cBus_LastHalError());
+  if (!protocolReady)
+    (void) DebugLog_Printf("protocol: USART6 callback registration or RX DMA start failed\r\n");
+  W25Q128_Result flashInit = W25Q128_Init(&hspi2);
+  if (flashInit == W25Q128_OK) FlashDmaTest_Identify();
+  else (void) DebugLog_Printf("FLASH DMA init failed %u\r\n", flashInit);
+  (void) EthProbe_Start();
+
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    if (relayPatternRequest == 1U)
+    {
+      relayPatternRequest = 0U;
+      PCA9536_Registers state;
+      I2cBusResult result = PCA9536_WriteMasked(0x0fU, 0x03U);
+      if (result == I2C_BUS_OK) result = PCA9536_ReadRegisters(&state);
+      if (result == I2C_BUS_OK)
+        (void) DebugLog_Printf("Relay hold: requested=3 latch=%X input=%X config=%X\r\n",
+            state.output & 0x0fU, state.input & 0x0fU, state.config & 0x0fU);
+      else
+        (void) DebugLog_Printf("Relay hold: failed %u; state unknown\r\n", result);
+    }
+    if (relay3TestRequest == 1U)
+    {
+      relay3TestRequest = 0U;
+      PCA9536_Registers state;
+      I2cBusResult result = PCA9536_ReadRegisters(&state);
+      if (result != I2C_BUS_OK || (state.config & 0x04U) != 0U || (state.output & 0x04U) != 0U)
+      {
+        (void) DebugLog_Printf("Relay 3 test: skipped, IO2 must be output LOW\r\n");
+      }
+      else
+      {
+        for (unsigned int i = 0; i < 3U && result == I2C_BUS_OK; i++)
+        {
+          result = PCA9536_WriteMasked(0x04U, 0x04U);
+          if (result == I2C_BUS_OK) result = PCA9536_ReadRegisters(&state);
+          if (result == I2C_BUS_OK && ((state.output & 0x04U) == 0U || (state.input & 0x04U) == 0U)) result = I2C_BUS_TRANSFER_ERROR;
+          (void) DebugLog_Printf("Relay 3 test: cycle %u IO2 HIGH %s\r\n", i + 1U, result == I2C_BUS_OK ? "PASS" : "FAIL");
+          osDelay(1500);
+          I2cBusResult off = PCA9536_WriteMasked(0x04U, 0U);
+          if (off == I2C_BUS_OK) off = PCA9536_ReadRegisters(&state);
+          if (off == I2C_BUS_OK && ((state.output & 0x04U) != 0U || (state.input & 0x04U) != 0U)) off = I2C_BUS_TRANSFER_ERROR;
+          (void) DebugLog_Printf("Relay 3 test: cycle %u IO2 LOW %s\r\n", i + 1U, off == I2C_BUS_OK ? "PASS" : "FAIL");
+          if (result == I2C_BUS_OK) result = off;
+          osDelay(1000);
+        }
+        (void) DebugLog_Printf("Relay 3 test: %s\r\n", result == I2C_BUS_OK ? "COMPLETE" : "FAILED; relay state may be unknown");
+      }
+    }
+    if (flashTestRequest == 1U)
+    {
+      flashTestRequest = 0U;
+      FlashDmaTest_Run();
+    }
+    HAL_GPIO_TogglePin(LED_Blue_GPIO_Port, LED_Blue_Pin);
+    (void) DebugLog_Printf("SmartSwitch: USART6 DMA and LED heartbeat\r\n");
+    EthProbe_Report();
+    osDelay(500);
   }
   /* USER CODE END 5 */
 }

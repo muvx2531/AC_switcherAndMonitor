@@ -526,16 +526,16 @@ __weak_func void osFreeMem(void *p)
  * @brief Provide the memory that is used by the idle task
  **/
 
-//void vApplicationGetIdleTaskMemory(StaticTask_t **ppxIdleTaskTCBBuffer,
-//   StackType_t **ppxIdleTaskStackBuffer, uint32_t *pulIdleTaskStackSize)
-//{
-//   static StaticTask_t xIdleTaskTCB;
-//   static StackType_t uxIdleTaskStack[configMINIMAL_STACK_SIZE];
-//
-//   *ppxIdleTaskTCBBuffer = &xIdleTaskTCB;
-//   *ppxIdleTaskStackBuffer = uxIdleTaskStack;
-//   *pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
-//}
+void vApplicationGetIdleTaskMemory(StaticTask_t **ppxIdleTaskTCBBuffer,
+   StackType_t **ppxIdleTaskStackBuffer, uint32_t *pulIdleTaskStackSize)
+{
+   static StaticTask_t xIdleTaskTCB;
+   static StackType_t uxIdleTaskStack[configMINIMAL_STACK_SIZE];
+
+   *ppxIdleTaskTCBBuffer = &xIdleTaskTCB;
+   *ppxIdleTaskStackBuffer = uxIdleTaskStack;
+   *pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
+}
 
 #endif
 
