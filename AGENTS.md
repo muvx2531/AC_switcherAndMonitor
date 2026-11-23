@@ -26,6 +26,11 @@ changing Ethernet initialization. The read-only status web (`web_server.c`, page
 `web/`, packed into `Core/Src/res.c` by `python tools/make_res.py`) is described in
 `docs/web-status-api.md`; never edit `res.c` by hand.
 
+Phase 1 foundation is in `docs/phase1-foundation.md`: only `supervisor.c` toggles the
+STWD100 (PE7) after `main()`; long-running work in the default task must call
+`Supervisor_Heartbeat()` at least every 2 s. The first I2C activity at boot is
+`I2cBus_Recover()`; keep it before any PCA9536 or OLED access.
+
 For the two SPI flash devices and the guarded destructive test, see
 [`docs/flash-bringup.md`](docs/flash-bringup.md). Do not rerun the write/erase
 test against nonblank or non-reserved storage. Use the `w25q128` DMA driver;

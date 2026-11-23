@@ -16,5 +16,10 @@ void I2cBus_Unlock(void);
 I2cBusResult I2cBus_ReadRegLocked(uint8_t address, uint8_t reg, uint8_t *value);
 I2cBusResult I2cBus_WriteRegLocked(uint8_t address, uint8_t reg, uint8_t value);
 uint32_t I2cBus_LastHalError(void);
+/* Bus recovery: 9 SCL clocks + STOP, then re-init I2C1/DMA/IRQ and callbacks.
+ * Writes no slave register. Run once at boot before the first transfer (S6-1);
+ * I2cBus_Lock also runs it automatically (max 1/s) after a timeout fault. */
+I2cBusResult I2cBus_Recover(void);
+uint32_t I2cBus_RecoveryCount(void);
 
 #endif

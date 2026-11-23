@@ -29,6 +29,8 @@
 #include "flash_dma_test.h"
 #include "pca9536.h"
 #include "debug_protocol.h"
+#include "boot.h"
+#include "supervisor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -124,7 +126,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  Boot_CaptureResetCause();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -140,7 +142,7 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  Boot_WdtEarlyKick();  /* STWD100 boot phase starts here (S4-1) */
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -156,7 +158,8 @@ int main(void)
   MX_USART2_UART_Init();
   MX_RNG_Init();
   /* USER CODE BEGIN 2 */
-
+  Boot_WdtKick();
+  Boot_SafeUnusedInterfaces();
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -183,7 +186,7 @@ int main(void)
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  if (!Supervisor_Start()) Error_Handler();
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -529,7 +532,12 @@ static void MX_RTC_Init(void)
   }
 
   /* USER CODE BEGIN Check_RTC_BKUP */
-
+  /* Keep the calendar across resets (BKP0R magic, docs/architecture/drivers/bkp-rtc.md). */
+  if (HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR0) == 0x52544331U)  /* "RTC1" */
+  {
+    Boot_SetRtcKept(true);
+    return;
+  }
   /* USER CODE END Check_RTC_BKUP */
 
   /** Initialize RTC and set the Time and Date
@@ -553,7 +561,7 @@ static void MX_RTC_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN RTC_Init 2 */
-
+  HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR0, 0x52544331U);
   /* USER CODE END RTC_Init 2 */
 
 }
@@ -872,8 +880,13 @@ void StartDefaultTask(void *argument)
    * while TX is idle: start both before the first log message is queued. */
   (void) DebugLog_Init(&huart6);
   bool protocolReady = DebugProtocol_Start(&huart6);
+  (void) DebugLog_Printf("BOOT: reset cause %s, RTC %s\r\n", Boot_ResetCause(),
+      Boot_RtcKept() ? "kept" : "set to default");
   PCA9536_Registers pcaBefore, pcaAfter;
   I2cBusResult i2cResult = I2cBus_Init(&hi2c1);
+  /* S6-1: first I2C activity is a bus recovery (the PCA9536 may hold SDA after a
+   * reset mid-transfer), then the read-first init that keeps output state (I1). */
+  if (i2cResult == I2C_BUS_OK) i2cResult = I2cBus_Recover();
   if (i2cResult == I2C_BUS_OK) i2cResult = PCA9536_InitOutputsKeepState(&pcaBefore, &pcaAfter);
   if (i2cResult == I2C_BUS_OK)
     (void) DebugLog_Printf("PCA9536: boot config=%X latch=%X -> config=%X latch=%X\r\n",
@@ -887,10 +900,12 @@ void StartDefaultTask(void *argument)
   if (flashInit == W25Q128_OK) FlashDmaTest_Identify();
   else (void) DebugLog_Printf("FLASH DMA init failed %u\r\n", flashInit);
   (void) EthProbe_Start();
+  Supervisor_BootComplete();
 
   /* Infinite loop */
   for(;;)
   {
+    Supervisor_Heartbeat();
     if (relayPatternRequest == 1U)
     {
       relayPatternRequest = 0U;
@@ -921,12 +936,14 @@ void StartDefaultTask(void *argument)
           if (result == I2C_BUS_OK && ((state.output & 0x04U) == 0U || (state.input & 0x04U) == 0U)) result = I2C_BUS_TRANSFER_ERROR;
           (void) DebugLog_Printf("Relay 3 test: cycle %u IO2 HIGH %s\r\n", i + 1U, result == I2C_BUS_OK ? "PASS" : "FAIL");
           osDelay(1500);
+          Supervisor_Heartbeat();
           I2cBusResult off = PCA9536_WriteMasked(0x04U, 0U);
           if (off == I2C_BUS_OK) off = PCA9536_ReadRegisters(&state);
           if (off == I2C_BUS_OK && ((state.output & 0x04U) != 0U || (state.input & 0x04U) != 0U)) off = I2C_BUS_TRANSFER_ERROR;
           (void) DebugLog_Printf("Relay 3 test: cycle %u IO2 LOW %s\r\n", i + 1U, off == I2C_BUS_OK ? "PASS" : "FAIL");
           if (result == I2C_BUS_OK) result = off;
           osDelay(1000);
+          Supervisor_Heartbeat();
         }
         (void) DebugLog_Printf("Relay 3 test: %s\r\n", result == I2C_BUS_OK ? "COMPLETE" : "FAILED; relay state may be unknown");
       }

@@ -9,6 +9,8 @@
 #include "pca9536.h"
 #include "adc_raw.h"
 #include "w25q128.h"
+#include "boot.h"
+#include "supervisor.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -90,6 +92,9 @@ static void buildStatus(void)
   (void)DebugLog_GetStats(&ls);
   put("\"sys\":{\"heap_free\":%u,\"heap_min\":%u,\"heap_total\":%u,", (unsigned)xPortGetFreeHeapSize(),
       (unsigned)xPortGetMinimumEverFreeHeapSize(), (unsigned)configTOTAL_HEAP_SIZE);
+  put("\"reset_cause\":\"%s\",\"watchdog\":{\"phase\":\"%s\"},\"rtc_kept\":%s,\"i2c_recoveries\":%lu,",
+      Boot_ResetCause(), Supervisor_Phase(), Boot_RtcKept() ? "true" : "false",
+      (unsigned long)I2cBus_RecoveryCount());
   put("\"log\":{\"queued\":%lu,\"high\":%lu,\"dropped\":%lu,\"dma_start_err\":%lu,\"dma_xfer_err\":%lu},",
       (unsigned long)ls.queued_bytes, (unsigned long)ls.high_water_bytes, (unsigned long)ls.dropped_messages,
       (unsigned long)ls.dma_start_errors, (unsigned long)ls.dma_transfer_errors);

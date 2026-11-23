@@ -7,8 +7,12 @@ task via a binary semaphore. A static mutex serializes the whole I2C1 bus;
 the PCA driver holds it over read-modify-write. OLED and future clients must
 use the same bus manager (its current public helper only transfers one-byte
 registers; extend it for OLED data). API calls are task-context only and wait
-with timeouts. On transfer timeout, the driver stops DMA and latches the bus
-faulted until reset; the I2C peripheral/device state may be uncertain.
+with timeouts. On transfer timeout, the driver stops DMA and marks the bus
+faulted; the next `I2cBus_Lock` runs a bus recovery (max once per second):
+9 SCL clocks + STOP, I2C1 reset and re-init, callbacks re-registered, no slave
+register written. `I2cBus_Recover()` also runs once at boot before the first
+PCA9536 read. See `docs/phase1-foundation.md`. After any fault, re-read the PCA
+before trusting its state.
 
 `Core/Inc/pca9536.h` and `Core/Src/pca9536.c` implement register reads,
 startup output configuration and masked read-modify-write of the output latch,
