@@ -87,8 +87,19 @@ or driver state; the page labels raw values and does not interpret polarity.
 
 ## Firmware implementation (Phase 0.5, branch `feature/status-web`)
 
-Built in Debug and Release with 0 errors / 0 warnings on 2026-11-23. **Not yet tested on
-hardware.**
+Built in Debug and Release with 0 errors / 0 warnings on 2026-11-23.
+
+**Hardware test 2026-11-23 (Debug build, direct cable to PC 192.168.0.222, relays not fitted,
+no AC):** boot log showed PCA9536 kept `config=0 latch=0`, both flash IDs `EF 40 18`, MAC
+`02:A2:C0:99:BD:88`, DHCP start, then the static fallback `192.168.0.223/24` at ~12.6 s.
+Ping 0% loss. `GET /` returned the page gzip-encoded; the page rendered live in a browser.
+Soak: two clients polled `/api/status` every 1 s for 180 s (plus one browser tab):
+354 requests, 0 failures, log drops 0. Heap minimum ever 17,592 B of 49,152 B (heap free
+~25.5 KB at the end). Minimum stack free (words): IDLE 105, Tmr Svc 214, debugTx 217,
+defaultTask 282, TCP/IP 403, debugRx 460, HTTP Connection 478, HTTP Listener 511.
+The first test run showed `defaultTask` at only 26 words free; its stack was raised from
+256 to 512 words (`main.c` and `.ioc`). Not tested: DHCP behind the RUTM51, link loss
+during polling, power cycling, long-duration operation.
 
 | Part | Where | Notes |
 |---|---|---|

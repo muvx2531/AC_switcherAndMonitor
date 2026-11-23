@@ -8,6 +8,7 @@
 #include "dhcp/dhcp_client.h"
 #include "drivers/mac/stm32f4xx_eth_driver.h"
 #include "drivers/phy/lan8742_driver.h"
+#include <stdio.h>
 #include <string.h>
 
 extern ETH_HandleTypeDef heth;
@@ -52,6 +53,13 @@ static void dhcpTimeoutEvent(DhcpClientContext *context, NetInterface *interface
 {
   (void)context; (void)interface;
   dhcpTimedOut = true;
+}
+
+/* "02:A2:C0:99:BD:88" (colons, as router DHCP lease pages use). */
+static void formatMac(char out[18])
+{
+  (void)snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X",
+      macBytes[0], macBytes[1], macBytes[2], macBytes[3], macBytes[4], macBytes[5]);
 }
 
 static void applyFallback(void)
@@ -120,7 +128,8 @@ bool EthProbe_Start(void)
     return false;
   }
   char macText[18];
-  (void)DebugLog_Printf("ETH: MAC %s (from STM32 UID)\r\n", macAddrToString(&macAddress, macText));
+  formatMac(macText);
+  (void)DebugLog_Printf("ETH: MAC %s (from STM32 UID)\r\n", macText);
 
   DhcpClientSettings dhcpSettings;
   dhcpClientGetDefaultSettings(&dhcpSettings);
@@ -162,7 +171,7 @@ void EthProbe_Report(void)
 void EthProbe_GetInfo(EthInfo *info)
 {
   memset(info, 0, sizeof(*info));
-  macAddrToString((const MacAddr *)macBytes, info->mac);
+  formatMac(info->mac);
   info->phyId1 = phyId1; info->phyId2 = phyId2;
   if (!available) return;
   Ipv4Addr ip = IPV4_UNSPECIFIED_ADDR, mask = IPV4_UNSPECIFIED_ADDR, gw = IPV4_UNSPECIFIED_ADDR;

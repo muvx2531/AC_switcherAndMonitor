@@ -12,7 +12,8 @@ round-trip 29 ms. Power-cycle and hardware fault recovery remain untested.
 The 2026-11-19 tests used the PC at `192.168.0.222/24`, board static IP
 `192.168.0.223/24`, and MAC `02:00:00:00:00:01`.
 
-**Changed on branch `feature/status-web` (built, not yet hardware-tested):** the MAC
+**Changed on branch `feature/status-web` (bench-tested 2026-11-23 with a direct PC
+cable; DHCP with a real server not yet tested):** the MAC
 is derived from the STM32 UID (logged at boot), the board requests DHCP and falls
 back to static `192.168.0.223/24` if no lease arrives within 10 s, the TCP echo
 test is no longer started, and the read-only status web runs on port 80. See
