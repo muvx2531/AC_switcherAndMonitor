@@ -94,11 +94,11 @@ Driver (library ที่ task เรียก ไม่ได้รันแย
 | PCA9536 output/config, relay state, EXTI3 response | Control |
 | BKP slot `pending_restore` | Control |
 | ADC1, ADC2, timer trigger 6.4 kHz, DMA ของ ADC, DIAG_S1..4 | Acquisition |
-| PB3 Vin_Detect (state), PB9 eFuse_iLim, PE11/PE13 charger, PE0/PE1/PE2/PD1 rail EN, ขากันไฟย้อน, clock ลดลงใน LOW_POWER | Power |
+| PB3 Vin_Detect (state), PB9 eFuse_iLim, PE11/PE13 charger, PE0/PE1/PC10/PD1 rail EN, ขากันไฟย้อน, clock ลดลงใน LOW_POWER | Power |
 | PE7 Clr_wdt, reset cause, BKP slot ของ Supervisor, safe mode | Supervisor |
 | ETH MAC/IRQ, PHY, CycloneTCP, MAC address, DHCP | Network |
 | SPI2 + W25Q128 ×2 (ผ่าน driver), partition, log, config | Storage |
-| OLED (ผ่าน I2C bus), SW1 PE4, SW2 PB5, LED PC11 | Local UI |
+| OLED (ผ่าน I2C bus), SW1 PA15, SW2 PB5, LED PC11 | Local UI |
 | USART6 TX (debug log) และ RX (protocol) | Diagnostics |
 | RTC และ BKP magic ของ RTC | Time module (ใน Supervisor) |
 | I2C1 bus + DMA + callbacks | driver `i2c_bus` (ใช้ได้ทั้ง Control และ Local UI) |

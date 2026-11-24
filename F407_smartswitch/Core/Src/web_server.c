@@ -7,7 +7,7 @@
 #include "debug_log.h"
 #include "eth_probe.h"
 #include "pca9536.h"
-#include "adc_raw.h"
+#include "acquisition.h"
 #include "w25q128.h"
 #include "boot.h"
 #include "supervisor.h"
@@ -85,11 +85,31 @@ static void buildStatus(void)
       pin(Vin_Detect_GPIO_Port, Vin_Detect_Pin), pin(eFuse_iLim_GPIO_Port, eFuse_iLim_Pin),
       pin(Batt_status_GPIO_Port, Batt_status_Pin), pin(Batt_FAULT_GPIO_Port, Batt_FAULT_Pin));
 
-  uint16_t raw;
-  if (AdcRaw_GetVbat(&raw))
-    put("\"vbat\":{\"ok\":true,\"raw\":%u,\"mv_est\":%lu},", raw, (unsigned long)AdcRaw_VbatEstimateMv(raw));
+  /* Acquisition snapshot: a value is printed only when its validity is VALID, else null. */
+  AcqSnapshot a;
+  Acquisition_GetSnapshot(&a);
+  bool vbOk = a.vbat.validity == ACQ_VALID;
+  if (vbOk)
+    put("\"vbat\":{\"ok\":true,\"state\":\"VALID\",\"raw\":%u,\"mv_est\":%ld,\"age_ms\":%lu},",
+        a.vbat.raw, (long)a.vbat.value, (unsigned long)a.vbat.age_ms);
   else
-    put("\"vbat\":{\"ok\":false,\"raw\":null,\"mv_est\":null},");
+    put("\"vbat\":{\"ok\":false,\"state\":\"%s\",\"raw\":null,\"mv_est\":null,\"age_ms\":%lu},",
+        Acquisition_ValidityName(a.vbat.validity), (unsigned long)a.vbat.age_ms);
+  put("\"acq\":{\"running\":%s,\"restarts\":%lu,\"missed\":%lu,\"cycles\":%lu,\"cal\":%u,",
+      a.running ? "true" : "false", (unsigned long)a.restarts, (unsigned long)a.missed_halves,
+      (unsigned long)a.cycles, a.cal_version);
+  if (a.ct.validity == ACQ_VALID)
+    put("\"ct\":{\"state\":\"VALID\",\"ma\":%ld,\"dc_raw\":%u},", (long)a.ct.value, a.ct.raw);
+  else
+    put("\"ct\":{\"state\":\"%s\",\"ma\":null,\"dc_raw\":null},", Acquisition_ValidityName(a.ct.validity));
+  put("\"ac\":[");
+  for (unsigned int i = 0; i < ACQ_AC_CHANNELS; i++) {
+    if (a.ac_v[i].validity == ACQ_VALID)
+      put("%s{\"state\":\"VALID\",\"v_x10\":%ld}", i ? "," : "", (long)a.ac_v[i].value);
+    else
+      put("%s{\"state\":\"%s\",\"v_x10\":null}", i ? "," : "", Acquisition_ValidityName(a.ac_v[i].validity));
+  }
+  put("]},");
 
   put("\"amc_diag\":[%u,%u,%u,%u],", pin(DIAG_S1_GPIO_Port, DIAG_S1_Pin), pin(DIAG_S2_GPIO_Port, DIAG_S2_Pin),
       pin(DIAG_S3_GPIO_Port, DIAG_S3_Pin), pin(DIAG_S4_GPIO_Port, DIAG_S4_Pin));

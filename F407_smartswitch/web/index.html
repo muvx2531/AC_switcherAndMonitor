@@ -77,14 +77,14 @@ label.f input,label.f select{color:var(--fg);font-family:var(--mono)}
 <main>
   <section class="view" id="v-status">
     <div class="row r4" id="relays"></div>
-    <p class="note" style="margin:-6px 0 0">Relay cards show the PCA9536 latch read-back only. LOW = coil off = load on (NC contacts). Contact state is not measured yet.</p>
+    <p class="note" style="margin:-6px 0 0">Relay cards show the PCA9536 latch read-back only. LOW = coil off = load on (NC contacts). Contact state is not measured (AMC3330 voltage sensors).</p>
     <div class="row r3">
       <div class="card"><h2>Power inputs <span class="badge warn">raw</span></h2><dl class="kv" id="power"></dl>
-        <p class="note">Polarity of Vin_Detect is not verified yet (open item H2). Values are GPIO levels, not interpreted states.</p></div>
+        <p class="note">Vin_Detect HIGH = 24 V present (verified 2026-11-24, H2). Other values are raw GPIO levels.</p></div>
       <div class="card"><h2>Battery</h2><dl class="kv" id="battery"></dl><div class="bar"><i id="vbat-bar" style="width:0"></i></div>
-        <p class="note">Estimate from nominal 3.000 V reference and divider; not calibrated.</p></div>
-      <div class="card"><h2>AC sense diagnostics <span class="badge warn">raw</span></h2><dl class="kv" id="diag"></dl>
-        <p class="note">AMC3330 DIAG pins. Low means channel data unusable. AC voltage readings arrive with the Acquisition service.</p></div>
+        <p class="note">Mean over 1 s from the Acquisition service. Nominal 3.000 V reference and divider; not calibrated.</p></div>
+      <div class="card"><h2>AC measurement</h2><dl class="kv" id="acq"></dl>
+        <p class="note">RMS over 1 s, 6.4 kHz sampling. Not calibrated. A value is shown only when its state is VALID.</p></div>
     </div>
     <div class="row r3">
       <div class="card"><h2>Network</h2><dl class="kv" id="net"></dl></div>
@@ -188,7 +188,16 @@ function renderStatus(d) {
   $("battery").innerHTML = kv([["ADC raw (IN13)", vb.ok ? vb.raw : badge("n/a", "bad")],
     ["Estimated", vb.ok ? (vb.mv_est / 1000).toFixed(2) + " V" : "—"], ["Pack", "LiFePO4 2S"]]);
   $("vbat-bar").style.width = vb.ok ? Math.max(0, Math.min(100, (vb.mv_est - 5600) / 17)) + "%" : "0";
-  $("diag").innerHTML = kv(d.amc_diag.map((v, i) => [`DIAG_S${i + 1}`, v == null ? badge("n/a", "neutral") : v ? badge("OK (1)", "ok") : badge("LOW (0)", "bad")]));
+  const st = x => badge(x, x === "VALID" ? "ok" : x === "NOT_FITTED" || x === "NO_DATA" ? "neutral" : "bad");
+  const q = d.acq;
+  if (q) {
+    $("acq").innerHTML = kv([
+      ["Load current (CT)", q.ct.state === "VALID" ? (q.ct.ma / 1000).toFixed(2) + " A" : st(q.ct.state)],
+      ...q.ac.map((c, i) => [`Line ${i + 1} voltage`, c.state === "VALID" ? (c.v_x10 / 10).toFixed(1) + " V" : st(c.state)]),
+      ["Sampling", q.running ? badge("RUNNING", "ok") : badge("STOPPED", "bad")],
+      ["Restarts / missed", `${q.restarts} / ${q.missed}`],
+      ["DIAG_S1..4", d.amc_diag.map(v => v == null ? "?" : v).join(" ")]]);
+  } else $("acq").innerHTML = kv([["Acquisition", badge("not available on this firmware", "neutral")]]);
   const n = d.net, netRows = [["Link", n.link ? badge("UP", "ok") : badge("DOWN", "bad")], ["Address mode", esc(n.mode.toUpperCase())],
     ["IP", esc(n.ip || "—")], ["Netmask", esc(n.mask || "—")], ["Gateway", esc(n.gw || "—")], ["MAC", esc(n.mac)], ["PHY ID", esc(n.phy_id)]];
   $("net").innerHTML = kv(netRows); $("net2").innerHTML = kv(netRows);
@@ -363,7 +372,9 @@ function mockStatus() {
     relay: { ok: true, err: 0, output: M.output, input: 0xF0 | M.output, config: 0xF0 },
     control: { available: true, state_known: true, coil_supply: on24, cycle_remaining_s: M.cycles.map(c => c ? Math.ceil((c - Date.now()) / 1000) : 0) },
     power: { vin_detect: on24 ? 1 : 0, efuse_ilim: on24 ? 1 : 0, chrg: 1, fault: 1 },
-    vbat: { ok: true, raw: 3207 + (t / 1000 % 3 | 0), mv_est: 6553 },
+    vbat: { ok: true, state: "VALID", raw: 3207 + (t / 1000 % 3 | 0), mv_est: 6553, age_ms: 400 },
+    acq: { running: true, restarts: 0, missed: 0, cycles: t / 20 | 0, cal: 0, ct: { state: "VALID", ma: 420 + (t / 1000 % 5 | 0) * 10, dc_raw: 2047 },
+           ac: [0, 1, 2, 3].map(() => ({ state: "NOT_FITTED", v_x10: null })) },
     amc_diag: [1, 1, 1, 0],
     flash: [{ ok: true, jedec: "EF 40 18" }, { ok: true, jedec: "EF 40 18" }],
     sys: { heap_free: 24800, heap_min: 15912, heap_total: 49152, reset_cause: "POWER_ON", watchdog: { phase: "run" }, rtc_kept: true, i2c_recoveries: 1, log: { queued: 0, high: 412, dropped: 0, dma_start_err: 0, dma_xfer_err: 0 },

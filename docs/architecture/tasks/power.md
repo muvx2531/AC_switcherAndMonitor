@@ -10,7 +10,7 @@ MAINS / BACKUP / LOW_POWER แล้วแจ้งข้อเท็จจร�
 | PB3 Vin_Detect (สถานะยืนยันระยะยาว) | หลัง F101 (S2-3) polarity รอยืนยัน (open-items H2) Control ตอบสนองขาลงเองตามกฎ (ค) |
 | PB9 eFuse_iLim | low = ไฟเข้าบอร์ดหาย/UVLO/OVP/ILIM ใช้แยกสาเหตุ |
 | PE13 Batt_status (CHRG), PE11 Batt_FAULT | LT3652 active-low |
-| PE0 En_3v3_ETH, PE2 En_3v3_AMC | service อื่น "ขอ" rail ห้ามสั่งขาเอง |
+| PE0 En_3v3_ETH, PC10 En_3v3_AMC | service อื่น "ขอ" rail ห้ามสั่งขาเอง |
 | PE1 En_3v3_Per | LOW ตลอดใน v1 (RS485 ไม่ใช้) |
 | PD1 EN_LTE_POW | LOW ตลอดใน v1 (EC25 ไม่ใช้) |
 | ขาที่ต้องตั้งก่อนปิด rail | RMII (PA1/2/7, PB11–13, PC1/4/5), PD5, PA9, PD15 |
@@ -38,7 +38,7 @@ MAINS ──24V หาย (ยืนยัน)──▶ BACKUP ──VBAT < เ�
 |---|---|
 | +3.3V_ETH (PE0) | ตั้งขา RMII เป็น analog/low และหยุด CycloneTCP interface ก่อน |
 | +3.3V_PER (PE1) | PD5 (U2_TX) เป็น low/input |
-| +3.3V_AMC (PE2) | Acquisition ต้องไม่สนใจ DIAG ระหว่างปิดและ 1–2 ms หลังเปิด |
+| +3.3V_AMC (PC10) | Acquisition ต้องไม่สนใจ DIAG ระหว่างปิดและ 1–2 ms หลังเปิด |
 | +3V3_LTE (PD1) | PA9 / PD15 เป็น low/input (ใน v1 ปิดตลอด) |
 
 ## Input

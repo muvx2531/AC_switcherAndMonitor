@@ -1,7 +1,7 @@
 #include "debug_protocol.h"
 #include "debug_log.h"
 #include "pca9536.h"
-#include "adc_raw.h"
+#include "acquisition.h"
 #include "control.h"
 #include "main.h"
 #include "FreeRTOS.h"
@@ -23,8 +23,16 @@ static volatile bool rxFailed;
 static void rxCompleteCallback(UART_HandleTypeDef *uart);
 static void errorCallback(UART_HandleTypeDef *uart);
 
-/* ADC2 is owned by adc_raw.c (shared with the status web). */
-static bool readBatteryRaw(uint16_t *raw) { return AdcRaw_GetVbat(raw); }
+/* ADC is owned by the Acquisition service: read its 1 s VBAT mean from the snapshot. */
+static bool readBattery(uint16_t *raw, uint32_t *mv)
+{
+  AcqSnapshot a;
+  Acquisition_GetSnapshot(&a);
+  if (a.vbat.validity != ACQ_VALID) return false;
+  *raw = a.vbat.raw;
+  *mv = (uint32_t)a.vbat.value;
+  return true;
+}
 
 static int hexDigit(char c)
 {
@@ -82,17 +90,18 @@ static void handleLine(char *line)
   line[len - 3U] = '\0';
   if (strcmp(line + 4, "BATV") == 0) {
     uint16_t raw;
-    if (!readBatteryRaw(&raw)) {
+    uint32_t mv;
+    if (!readBattery(&raw, &mv)) {
       (void)snprintf(body, sizeof(body), "%s,ERR,ADC", seq); response(body); return;
     }
-    uint32_t mv = AdcRaw_VbatEstimateMv(raw);
     (void)snprintf(body, sizeof(body), "%s,BATV,%u,%lu,3000", seq,
         (unsigned)raw, (unsigned long)mv);
     response(body); return;
   }
   if (strcmp(line + 4, "BACKUP") == 0) {
     uint16_t raw;
-    if (!readBatteryRaw(&raw)) {
+    uint32_t mv;
+    if (!readBattery(&raw, &mv)) {
       (void)snprintf(body, sizeof(body), "%s,ERR,ADC", seq); response(body); return;
     }
     (void)snprintf(body, sizeof(body), "%s,BACKUP,%u,%u,%u,%u,%u", seq,
