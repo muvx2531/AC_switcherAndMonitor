@@ -20,10 +20,10 @@
 | CT | PA6 (IN6) | bias 1.5 V, I = (ADC − ค่าเฉลี่ย DC) × 7.33 mA/LSB, RMS ทั้งรอบ |
 | VBAT | PC3 (IN13) | VBAT = ADC × 2.038 mV (ต้อง calibrate) |
 
-mapping ช่อง ↔ ขา ↔ VAClineX ↔ DIAG ต้องยืนยันกับ schematic REV2 ([open-items H6](../open-items.md))
+mapping ยืนยันจาก schematic แล้ว ([open-items H6](../open-items.md)) **สถานะ implement:** `docs/phase3-acquisition.md` (VBAT เป็น rank ปกติของ ADC2 เฉลี่ย 1 s ไม่ใช่ injected; บอร์ดที่ไม่ได้ลง AMC3330 ตั้ง `ACQ_AMC_FITTED 0` ช่อง AC เป็น `NOT_FITTED`)
 
 ## Input
-- คำสั่งจาก Power: เปิด/ปิดการวัด AC ตามสถานะ rail AMC (PE2 เป็นของ Power)
+- คำสั่งจาก Power: เปิด/ปิดการวัด AC ตามสถานะ rail AMC (PC10 เป็นของ Power)
 
 ## Output
 `Acquisition_GetSnapshot()` คืนค่าต่อสัญญาณ: value, unit, raw, monotonic sample time, age,

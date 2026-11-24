@@ -32,6 +32,7 @@
 #include "boot.h"
 #include "supervisor.h"
 #include "control.h"
+#include "acquisition.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -898,6 +899,9 @@ void StartDefaultTask(void *argument)
    * even when the read failed, in state UNKNOWN (I3). */
   if (!Control_Start())
     (void) DebugLog_Printf("CTRL: start failed\r\n");
+  /* Acquisition owns ADC1/ADC2, TIM3 and DMA2 Stream0 from here on. */
+  if (!Acquisition_Start())
+    (void) DebugLog_Printf("ACQ: start failed\r\n");
   if (!protocolReady)
     (void) DebugLog_Printf("protocol: USART6 callback registration or RX DMA start failed\r\n");
   W25Q128_Result flashInit = W25Q128_Init(&hspi2);

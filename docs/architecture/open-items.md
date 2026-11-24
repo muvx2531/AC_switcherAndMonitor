@@ -12,7 +12,7 @@
 | H3 | **Schematic วงจร Vin_Detect ของ REV2** ไม่มีใน `SitePower.pdf` (export 2026-10-22) | ประเมิน RC filter/clamp และจุดต่อกับ +24Vcoil | เจ้าของโปรเจค |
 | H4 | **Release time จริงของรีเลย์** (มี 1N4148 คร่อม coil ทำให้หลุดช้ากว่า datasheet) วัด +24Vcoil เทียบหน้าสัมผัสด้วย scope | ใช้ตั้งช่วงยืนยันขา 24 V หาย (S4-2) | — |
 | H5 | glitch บน PB3 ตอนสั่งรีเลย์สลับรัวๆ (ดู `glitch_count`) | ตั้ง filter | — |
-| H6 | mapping ช่อง AC ↔ ขา ADC ↔ VAClineX ↔ DIAG_Sx ตาม schematic REV2 | Acquisition ต้องใช้ | — |
+| ~~H6~~ | ✅ **ปิดแล้ว 2026-11-24** จาก net ใน `SitePower.pdf` (MainMCU sheet): ADC_CH0..7 = PC0, PC2, PA0, PA3, PA4, PA5, PB0, PB1 (P/N ของช่อง 1–4), ADC_CH8 = PC3 (VBAT), ADC_CH9 = PA6 (CT), DIAG_S1..4 = PD8/PD10/PD12/PD14. การจับคู่ ADC_CHx ↔ vSense_Pn/Nn บน top sheet อ่านจาก PDF text ไม่ได้ ใช้ตาม HW doc (คู่ติดกัน) ให้ยืนยันอีกครั้งตอนลง AMC3330 | — | — |
 | H7 | วัด margin เวลา boot จริงก่อนถอด jumper DIS_WDT | S4-1 | — |
 | H8 | knee voltage ของแบต และกำลังไฟใน BACKUP เพื่อคำนวณ X ชั่วโมง | S1-5 | — |
 
@@ -34,7 +34,7 @@
 - HSE จริงเป็น **16 MHz** (doc เขียน 25 MHz)
 - flash CS จริงเป็น **PD7 / PD13** (doc เขียน PE3 / PE5)
 - เพิ่ม PB3 Vin_Detect ใน pin map
-- `.ioc` ปัจจุบันใช้ **SW1 = PA15** (doc เขียน PE4) และ **En_3v3_AMC = PC10** (doc เขียน PE2) ต้องยืนยันกับ schematic REV2 ว่าอันไหนถูก แล้วแก้ไฟล์ task ที่อ้างขาเหล่านี้ (power.md, local-ui.md)
+- ✅ ยืนยันจาก `SitePower.pdf` 2026-11-24: **SW1 = PA15** (pin 77), SW2 = PB5, **En_3v3_AMC = PC10** (pin 78), En_3v3_Per = PE1, En_3v3_ETH = PE0 ตรงกับ `.ioc` HW doc ที่เขียน PE4/PE2 ผิด (แก้ไฟล์ task แล้ว)
 - 06 §2: เปลี่ยนจาก "ทุก boot เขียน output 0x00" เป็นพฤติกรรม KeepState ตาม I1–I4 และตัดข้อความ "WDT reset แล้วคืนโหลด"
 
 ## ความเสี่ยงที่รู้อยู่

@@ -14,7 +14,7 @@ main() — ก่อน scheduler
  1. toggle PE7 (เริ่ม boot phase ของ WDT, ต้องภายใน 1.12 s หลัง reset)
  2. HAL / clock init (HSE 16 MHz) — MX_RTC_Init ต้องเช็ก magic และไม่ reset backup domain
  3. อ่าน reset cause จาก RCC_CSR เก็บไว้ให้ Supervisor แล้ว clear flag
- 4. ตั้งขาที่ต้องปลอดภัยตั้งแต่ต้น: PD1 = LOW (EC25), PE1 = LOW (RS485), PE0/PE2 ตามค่า default
+ 4. ตั้งขาที่ต้องปลอดภัยตั้งแต่ต้น: PD1 = LOW (EC25), PE1 = LOW (RS485), PE0/PC10 ตามค่า default
  5. start scheduler → Init task
 
 Init task — priority สูง

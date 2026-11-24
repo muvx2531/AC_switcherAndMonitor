@@ -26,7 +26,7 @@ ID อ้างถึง section ของ draft เดิมที่ถูก 
 |---|---|---|
 | S3-1 | UART/I2C/SPI ใช้ HAL register callbacks ต่อ handle **(ทำแล้วใน `bringup-baseline`)** | ไม่มี symbol global ชนกัน ตรงกับหลัก owner เดียว |
 | S3-2 | I2C มี recovery (toggle SCL 9 ครั้ง → STOP → re-init → ลงทะเบียน callback ใหม่ → อ่านกลับ) ไม่ latch fault ถาวร OLED ส่ง chunk ≤128 bytes | กฎ (ค) ต้องเขียน PCA ได้เสมอ และ OLED เสียต้องไม่ลามถึงรีเลย์ |
-| S3-3 | ADC1+ADC2 dual regular simultaneous, timer trigger 6.4 kHz, VBAT เป็น injected ของ ADC1 ทุก 1 s, Acquisition เป็นเจ้าของคนเดียว | ตาม HW doc ต้อง sample P/N ของ AMC3330 พร้อมกัน |
+| S3-3 | ADC1+ADC2 dual regular simultaneous, timer trigger 6.4 kHz, VBAT เป็น injected ของ ADC1 ทุก 1 s (**แก้ 2026-11-24:** ใช้ rank ปกติของ ADC2 เฉลี่ย 1 s แทน ดู `docs/phase3-acquisition.md`), Acquisition เป็นเจ้าของคนเดียว | ตาม HW doc ต้อง sample P/N ของ AMC3330 พร้อมกัน |
 | S3-4 | EC25 ไม่อยู่ใน v1: PD1 = LOW, PA9/PD15 = input/low | — |
 | S4-1 | WDT 2 ช่วง: boot phase (toggle ระหว่าง init, มีเส้นตายรวม) แล้ว Supervisor รับต่อ | STWD100 timeout 1.12 s ปิดด้วย software ไม่ได้ ตอนนี้บอร์ดเสียบ jumper DIS_WDT อยู่ |
 | S4-2 | PB3: EXTI ปลุก Control → Control ยืนยันโดยอ่านซ้ำ (ขาหาย 2–3 ms, ขากลับ 100–500 ms) → polling สำรองทุก 20–50 ms และตอน boot เป้า latency ≤10 ms | กัน noise/glitch จากการสวิตช์ coil glitch ที่สั้นกว่า release time ทำให้รีเลย์หลุดไม่ได้ ค่าจริงรอวัด |

@@ -119,7 +119,7 @@ during polling, power cycling, long-duration operation.
 | Page packing | `tools/make_res.py` → `Core/Src/res.c` | gzip of every file in `web/`, stored as `<name>.gz` in the CycloneCommon resource format (`resource_manager.h`). Deterministic output; `res.c` is committed |
 | HTTP server | `Core/Src/web_server.c` | CycloneTCP HTTP server, 2 connections, port 80, default document `index.html`. `GET /api/status` builds JSON (2 KB static buffer, mutex). Other `/api/*` return 501. Static files come from `res.c` via `resGetData` with gzip |
 | CycloneTCP options | end of `config/net_config.h` ("SmartSwitch project overrides") | `HTTP_SERVER_GZIP_TYPE_SUPPORT`, `HTTP_SERVER_MAX_CONNECTIONS 2`, buffer 1024, stack 700 words. Re-check after CubeMX regeneration |
-| ADC owner | `Core/Src/adc_raw.c` | single starter of ADC2 DMA, used by serial `BACKUP/BATV` and the web. Replaced later by Acquisition |
+| ADC owner | `Core/Src/acquisition.c` (Phase 3) | replaced `adc_raw.c`. `vbat` = 1 s mean with `state`/`age_ms`; `acq` = `{running, restarts, missed, cycles, cal, ct:{state, ma, dc_raw}, ac:[{state, v_x10}]}`, numbers are `null` unless `state` is `VALID` (see `docs/phase3-acquisition.md`) |
 | MAC | `eth_probe.c` `macFromUid` | `02:xx:xx:xx:xx:xx`, FNV-1a 64 of the 96-bit UID. Logged at boot and shown on the page |
 | IP | `eth_probe.c` | DHCP; if no lease within 10 s, static `192.168.0.223/24` until reboot (fallback is applied from the default task, not inside the CycloneTCP callback) |
 | Heap | `FreeRTOSConfig.h` + `.ioc` | `configTOTAL_HEAP_SIZE` 32 KB → 48 KB. Static RAM (data+bss+heap) ≈ 105 KB of 128 KB |

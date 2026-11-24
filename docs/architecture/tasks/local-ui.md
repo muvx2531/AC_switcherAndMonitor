@@ -8,7 +8,7 @@ Control (`source = SRC_LOCAL`) และอ่าน snapshot ห้ามเข
 | Resource | หมายเหตุ |
 |---|---|
 | OLED SSD1306 **128×32** (I2C1 `0x3C`) | ผ่าน driver [i2c-bus](../drivers/i2c-bus.md) ไฟจาก +3V3_MCU ประหยัดไฟด้วย Display OFF (0xAE) + ปิด charge pump |
-| SW1 PE4, SW2 PB5 | active-low, debounce hardware 10k/100 nF |
+| SW1 PA15, SW2 PB5 | active-low, debounce hardware 10k/100 nF |
 | LED_Blue PC11 | — |
 
 ## กฎที่กระทบ architecture

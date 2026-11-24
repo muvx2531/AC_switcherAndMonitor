@@ -48,4 +48,8 @@ the user has said energizing coils is safe at that moment. The web password is
 shared by all boards and lives in the untracked `Core/Inc/web_secrets.h`
 (template `web_secrets.example.h`): never commit it, print it or put it in docs.
 
+The Acquisition service (`acquisition.c`, `docs/phase3-acquisition.md`) is the only owner
+of ADC1/ADC2, TIM3 and DMA2 Stream0; read measurements with `Acquisition_GetSnapshot`.
+Fit the DIS_WDT jumper before flashing images larger than 128 KB (sector erase > WDT timeout).
+
 For the temporary USART6 command interface, read docs/serial-protocol.md. SET can actuate relays; checksum is not authentication.
