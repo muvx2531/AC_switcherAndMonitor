@@ -1,4 +1,5 @@
 #include "pq_history.h"
+#include "storage.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
@@ -72,6 +73,7 @@ void History_AddSecond(const AcqSnapshot *s)
   if (count < HIST_LEN) count++;
   newestEndS = nowS;
   taskEXIT_CRITICAL();
+  Storage_SaveMinute(&e);
   m.seconds = 0U;
 }
 

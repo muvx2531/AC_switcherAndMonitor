@@ -27,5 +27,7 @@ void Pq_EndWindow(uint32_t n, float fs, float vRefRms, float iRms, bool ctValid,
     const int32_t lineDv[ACQ_AC_CHANNELS], AcqPq *out);
 /* Timer auto-reload for the next window (sampling locked to 128 x f, or nominal). */
 uint32_t Pq_NextArr(uint32_t nominalArr, uint32_t timerHz);
+void Pq_SetEnergy(uint64_t uwh);
+uint64_t Pq_Energy(void);
 
 #endif

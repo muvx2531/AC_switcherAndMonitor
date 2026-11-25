@@ -115,6 +115,11 @@ bool Acquisition_Start(void);
 void Acquisition_GetSnapshot(AcqSnapshot *out);
 const char *Acquisition_ValidityName(AcqValidity v);
 void Acquisition_GetWaveform(AcqWaveform *out);
+/* Runtime board options, fixed at Acquisition_Start from the stored config (Storage)
+ * or the build defaults (ACQ_AMC_FITTED, ACQ_CT_PHASE_DEG). */
+bool Acquisition_AmcFitted(void);
+uint64_t Acquisition_EnergyUwh(void);
+float Acquisition_CtPhaseDeg(void);
 const char *Acquisition_EventName(AcqPqEvent e);
 const char *Acquisition_ContactName(AcqPqContact c);
 

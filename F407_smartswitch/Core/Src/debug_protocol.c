@@ -4,6 +4,8 @@
 #include "acquisition.h"
 #include "control.h"
 #include "boot.h"
+#include "storage.h"
+#include <stdlib.h>
 #include "main.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -98,6 +100,25 @@ static void handleLine(char *line)
     (void)snprintf(body, sizeof(body), "%s,BATV,%u,%lu,3000", seq,
         (unsigned)raw, (unsigned long)mv);
     response(body); return;
+  }
+  if (strcmp(line + 4, "STFORMAT") == 0) {  /* erase + format the storage partitions of chip 1 */
+    Storage_RequestFormat();
+    (void)snprintf(body, sizeof(body), "%s,STFORMAT,QUEUED", seq); response(body); return;
+  }
+  if (strncmp(line + 4, "AMC,", 4) == 0 || strncmp(line + 4, "CTPH,", 5) == 0) {
+    /* board config, effective after the next reset: AMC,0|1|D  CTPH,<0.01 degree> */
+    StConfig c;
+    Storage_GetConfig(&c);
+    if (line[4] == 'A') c.amc_fitted = line[8] == 'D' ? 0xFFU : (line[8] == '1' ? 1U : 0U);
+    else c.ct_phase_cdeg = (int16_t)atoi(line + 9);
+    bool ok = Storage_SetConfig(&c);
+    if (ok) Storage_LogEvent(ST_EV_CONFIG, (int32_t)c.amc_fitted, (int32_t)c.ct_phase_cdeg, 0, 0);
+    (void)snprintf(body, sizeof(body), "%s,CFG,%s", seq, ok ? "QUEUED" : "ERR"); response(body); return;
+  }
+  if (strcmp(line + 4, "FLSCAN") == 0) {    /* read-only whole-chip flash scan, results in the log */
+    extern volatile uint32_t flashTestRequest;
+    flashTestRequest = 2U;
+    (void)snprintf(body, sizeof(body), "%s,FLSCAN,STARTED", seq); response(body); return;
   }
   if (strcmp(line + 4, "CLRSAFE") == 0) {   /* clear the boot-loop counter (S6-5) */
     Boot_ClearResetCount();

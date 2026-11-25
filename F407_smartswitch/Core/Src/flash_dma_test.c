@@ -66,3 +66,35 @@ void FlashDmaTest_Run(void)
     if (!blank) return;
   }
 }
+
+/* Read-only blank check of both whole chips (Phase 5a prerequisite: never assume the
+ * storage is empty). Reports non-blank 64 KiB blocks. Calls Supervisor_Heartbeat. */
+#include "supervisor.h"
+void FlashDmaTest_Scan(void)
+{
+  static uint8_t buf[1024];
+  for (unsigned int c = 0; c < 2U; c++) {
+    W25Q128_Chip chip = (W25Q128_Chip)c;
+    uint32_t dirty = 0, reported = 0;
+    (void)DebugLog_Printf("FLSCAN %u: start\r\n", c + 1U);
+    for (uint32_t block = 0; block < W25Q128_CAPACITY; block += 0x10000UL) {
+      bool blank = true, err = false;
+      for (uint32_t off = 0; off < 0x10000UL; off += sizeof(buf)) {
+        if (W25Q128_Read(chip, block + off, buf, sizeof(buf)) != W25Q128_OK) { err = true; break; }
+        for (size_t i = 0; i < sizeof(buf); i++) if (buf[i] != 0xffU) { blank = false; break; }
+        if (!blank) break;
+      }
+      Supervisor_Heartbeat();
+      if (err) { (void)DebugLog_Printf("FLSCAN %u: read error at 0x%06lX\r\n", c + 1U, (unsigned long)block); break; }
+      if (!blank) {
+        dirty++;
+        if (reported++ < 24U) {
+          (void)W25Q128_Read(chip, block, buf, 16);
+          (void)DebugLog_Printf("FLSCAN %u: block 0x%06lX not blank, first bytes %02X %02X %02X %02X %02X %02X %02X %02X\r\n",
+              c + 1U, (unsigned long)block, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
+        }
+      }
+    }
+    (void)DebugLog_Printf("FLSCAN %u: done, %lu of 256 blocks not blank\r\n", c + 1U, (unsigned long)dirty);
+  }
+}

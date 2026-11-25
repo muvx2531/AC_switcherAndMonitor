@@ -32,6 +32,14 @@ const char *Boot_ResetCause(void)
   return "UNKNOWN";
 }
 
+int Boot_ResetCauseIndex(void)
+{
+  static const char *const names[] = { "UNKNOWN", "LOW_POWER", "WWDG", "IWDG", "SOFTWARE", "POWER_ON", "BROWN_OUT", "PIN" };
+  const char *c = Boot_ResetCause();
+  for (int i = 1; i < 8; i++) if (names[i] == c || (names[i][0] == c[0] && names[i][1] == c[1])) return i;
+  return 0;
+}
+
 void Boot_WdtEarlyKick(void)
 {
   __HAL_RCC_GPIOE_CLK_ENABLE();
@@ -62,7 +70,7 @@ void Boot_SafeUnusedInterfaces(void)
 void Boot_SetRtcKept(bool kept) { rtcKept = kept; }
 
 /* Seconds since 2000-01-01 from the RTC shadow registers (24 h format, BCD). */
-static uint32_t rtcSeconds(void)
+uint32_t Boot_RtcSeconds(void)
 {
   uint32_t tr = RTC->TR, dr = RTC->DR;
   (void)RTC->DR;   /* reading TR locks DR until DR is read: TR then DR is consistent */
@@ -87,7 +95,7 @@ void Boot_EvaluateSafeMode(void)
   HAL_PWR_EnableBkUpAccess();
   uint32_t head = HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR5);
   uint32_t count = (head & 0xFFFF0000U) == BKP_RESET_MAGIC ? (head & 0xFFFFU) : 0U;
-  uint32_t now = rtcKept ? rtcSeconds() : 0U;
+  uint32_t now = rtcKept ? Boot_RtcSeconds() : 0U;
   if (resetFlags & RCC_CSR_PORRSTF) {
     count = 0U;                                 /* power-on is not a reset loop */
   } else if (rtcKept && count > 0U) {

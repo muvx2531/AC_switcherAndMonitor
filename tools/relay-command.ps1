@@ -1,13 +1,14 @@
 param(
-  [ValidateSet('GET','SET','BACKUP','BATV','CLRSAFE')][string]$Command = 'GET',
+  [ValidateSet('GET','SET','BACKUP','BATV','CLRSAFE','FLSCAN','STFORMAT','RAW')][string]$Command = 'GET',
   [ValidateRange(0,15)][int]$Value = 0,
+  [string]$Raw = '',          # with -Command RAW: body after the sequence, e.g. 'AMC,1' or 'CTPH,150'
   [string]$Port = 'COM3',
   [ValidateRange(0,255)][int]$Sequence = 1,
   [int]$TimeoutMs = 3000
 )
 $ErrorActionPreference = 'Stop'
 $seq = '{0:X2}' -f $Sequence
-$body = if ($Command -eq 'GET') { "$seq,GET" } elseif ($Command -eq 'BACKUP') { "$seq,BACKUP" } elseif ($Command -eq 'BATV') { "$seq,BATV" } elseif ($Command -eq 'CLRSAFE') { "$seq,CLRSAFE" } else { "$seq,SET,{0:X}" -f $Value }
+$body = if ($Command -eq 'GET') { "$seq,GET" } elseif ($Command -eq 'BACKUP') { "$seq,BACKUP" } elseif ($Command -eq 'BATV') { "$seq,BATV" } elseif ($Command -eq 'CLRSAFE') { "$seq,CLRSAFE" } elseif ($Command -eq 'FLSCAN') { "$seq,FLSCAN" } elseif ($Command -eq 'STFORMAT') { "$seq,STFORMAT" } elseif ($Command -eq 'RAW') { "$seq,$Raw" } else { "$seq,SET,{0:X}" -f $Value }
 function Checksum([string]$value) {
   $sum = 0
   foreach ($byte in [Text.Encoding]::ASCII.GetBytes($value)) { $sum = ($sum + $byte) -band 255 }

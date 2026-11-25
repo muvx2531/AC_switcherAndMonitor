@@ -10,12 +10,15 @@
 #include "acquisition.h"
 #include "power.h"
 #include "pq_history.h"
+#include "storage.h"
+#include "boot.h"
 #include "w25q128.h"
 #include "boot.h"
 #include "supervisor.h"
 #include "control.h"
 #include "web_auth.h"
 #include <stdarg.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -160,6 +163,18 @@ static void buildStatus(void)
     put("%s{\"ok\":%s,\"jedec\":\"%02X %02X %02X\"}", i ? "," : "", flashOk[i] ? "true" : "false",
         flashId[i][0], flashId[i][1], flashId[i][2]);
   put("],");
+
+  StStatus st;
+  StConfig sc;
+  Storage_GetStatus(&st);
+  Storage_GetConfig(&sc);
+  put("\"storage\":{\"state\":\"%s\",\"event_seq\":%lu,\"history_records\":%lu,\"energy_saved_mwh\":%lu,"
+      "\"dropped\":%lu,\"write_errors\":%lu,\"config\":{\"seq\":%lu,\"amc\":%d,\"ct_phase_cdeg\":%d},"
+      "\"amc_active\":%s,\"rtc_s\":%lu,\"rtc_kept\":%s},",
+      Storage_StateName(st.state), (unsigned long)st.event_seq, (unsigned long)st.history_records,
+      (unsigned long)(st.energy_uwh_saved / 1000U), (unsigned long)st.dropped, (unsigned long)st.write_errors,
+      (unsigned long)sc.seq, sc.amc_fitted == 0xFFU ? -1 : (int)sc.amc_fitted, (int)sc.ct_phase_cdeg,
+      Acquisition_AmcFitted() ? "true" : "false", (unsigned long)Boot_RtcSeconds(), Boot_RtcKept() ? "true" : "false");
 
   DebugLogStats ls = {0};
   (void)DebugLog_GetStats(&ls);
@@ -371,6 +386,121 @@ static error_t sendHistory(HttpConnection *connection)
   return error;
 }
 
+/* GET /api/events[?n=N]: newest first (jsonMutex held). */
+static void buildEvents(const char *q)
+{
+  static StEvent ev[40];
+  uint32_t want = 30;
+  if (strncmp(q, "n=", 2) == 0) { want = (uint32_t)atoi(q + 2); if (want == 0U || want > 40U) want = 40U; }
+  uint32_t n = Storage_ReadEvents(ev, want);
+  jsonLen = 0U; jsonOverflow = false;
+  put("{\"rtc_s\":%lu,\"uptime_s\":%lu,\"events\":[", (unsigned long)Boot_RtcSeconds(),
+      (unsigned long)(xTaskGetTickCount() / configTICK_RATE_HZ));
+  for (uint32_t i = 0; i < n; i++)
+    put("%s{\"seq\":%lu,\"rtc_s\":%lu,\"up_s\":%lu,\"type\":%u,\"a\":%ld,\"b\":%ld,\"c\":%ld}", i ? "," : "",
+        (unsigned long)ev[i].seq, (unsigned long)ev[i].rtc_s, (unsigned long)ev[i].uptime_s, ev[i].type,
+        (long)ev[i].a, (long)ev[i].b, (long)ev[i].c);
+  put("]}");
+}
+
+/* History aggregation into time buckets, streamed as binary "PQH2":
+ * 16-byte header "PQH2", u8 version 2, u8 fields 9, u8 entry size 22, u8 0, u16 bucket s,
+ * u16 0, u32 RTC now (s since 2000); then entries u32 bucket end RTC + 9 x i16, oldest first.
+ * Chunked transfer (length unknown in advance). */
+typedef struct {
+  HttpConnection *c;
+  uint32_t bucket, key;
+  int32_t sum[9]; uint16_t cnt[9]; int16_t mn, mx;
+  uint8_t out[22 * 24]; uint32_t outLen;
+  error_t err;
+} HistAgg;
+
+static void aggFlushBucket(HistAgg *g)
+{
+  bool any = false;
+  for (int f = 0; f < 9; f++) if (g->cnt[f]) any = true;
+  if (any) {
+    uint8_t *o = &g->out[g->outLen];
+    uint32_t end = (g->key + 1U) * g->bucket;
+    memcpy(o, &end, 4);
+    for (int f = 0; f < 9; f++) {
+      int16_t v = HIST_MISSING;
+      if (g->cnt[f]) {
+        if (f == 1) v = g->mn; else if (f == 2) v = g->mx;
+        else { int32_t a = g->sum[f] / (int32_t)g->cnt[f]; v = (int16_t)a; }
+      }
+      memcpy(o + 4 + 2 * f, &v, 2);
+    }
+    g->outLen += 22U;
+    if (g->outLen + 22U > sizeof(g->out)) {
+      if (!g->err) g->err = httpWriteStream(g->c, g->out, g->outLen);
+      g->outLen = 0;
+    }
+  }
+  memset(g->sum, 0, sizeof(g->sum)); memset(g->cnt, 0, sizeof(g->cnt));
+  g->mn = INT16_MAX; g->mx = INT16_MIN;
+}
+
+static void aggAdd(HistAgg *g, uint32_t rtc, const HistEntry *e)
+{
+  uint32_t key = rtc / g->bucket;
+  if (key != g->key) { if (g->key != UINT32_MAX) aggFlushBucket(g); g->key = key; }
+  const int16_t *v = &e->v_avg_dv;
+  for (int f = 0; f < 9; f++) {
+    if (v[f] == HIST_MISSING) continue;
+    if (f == 1) { if (v[f] < g->mn) g->mn = v[f]; }
+    else if (f == 2) { if (v[f] > g->mx) g->mx = v[f]; }
+    else g->sum[f] += v[f];
+    g->cnt[f]++;
+  }
+}
+
+static void aggCallback(uint32_t rtc_s, const HistEntry *e, void *ctx) { aggAdd((HistAgg *)ctx, rtc_s, e); }
+
+static error_t sendHistory2(HttpConnection *connection)
+{
+  static HistAgg g;              /* static: HTTP stack is small; one sender at a time (mutex) */
+  const char *q = connection->request.queryString;
+  uint32_t span = 86400U, bucket = 60U;
+  if (strstr(q, "range=7d")) { span = 7U * 86400U; bucket = 600U; }
+  else if (strstr(q, "range=30d")) { span = 30U * 86400U; bucket = 1800U; }
+  else if (strstr(q, "range=90d")) { span = 90U * 86400U; bucket = 3600U; }
+  uint32_t now = Boot_RtcSeconds();
+  memset(&g, 0, sizeof(g));
+  g.c = connection; g.bucket = bucket; g.key = UINT32_MAX; g.mn = INT16_MAX; g.mx = INT16_MIN;
+  uint8_t hdr[16] = { 'P', 'Q', 'H', '2', 2U, 9U, 22U, 0U, (uint8_t)bucket, (uint8_t)(bucket >> 8), 0U, 0U };
+  memcpy(&hdr[12], &now, 4);
+  connection->response.statusCode = 200;
+  connection->response.contentType = "application/octet-stream";
+  connection->response.chunkedEncoding = TRUE;
+  connection->response.noCache = TRUE;
+  error_t error = httpWriteHeader(connection);
+  if (!error) error = httpWriteStream(connection, hdr, sizeof(hdr));
+  if (!error) {
+    StStatus st;
+    Storage_GetStatus(&st);
+    uint32_t from = now > span ? now - span : 0U;
+    if (st.state == ST_STATE_READY && st.history_records > 0U) {
+      (void)Storage_ReadHistory(from, aggCallback, &g);
+    } else {
+      /* no flash history: the RAM ring (uptime based) mapped onto RTC time */
+      uint32_t total = History_Count(), upNow = (uint32_t)(xTaskGetTickCount() / configTICK_RATE_HZ), endS = History_NewestEndS();
+      HistEntry e;
+      for (uint32_t i = 0; i < total; i++) {
+        if (!History_Get(i, &e)) break;
+        uint32_t entEnd = endS - (total - 1U - i) * HIST_PERIOD_S;
+        uint32_t rtc = now - (upNow - entEnd);
+        if (rtc >= from) aggAdd(&g, rtc, &e);
+      }
+    }
+    if (g.key != UINT32_MAX) aggFlushBucket(&g);
+    error = g.err;
+    if (!error && g.outLen) error = httpWriteStream(connection, g.out, g.outLen);
+  }
+  if (!error) error = httpCloseStream(connection);
+  return error;
+}
+
 static error_t requestCallback(HttpConnection *connection, const char_t *uri)
 {
   if (strncmp(uri, "/api/", 5) != 0) return ERROR_NOT_FOUND;  /* static page from res.c */
@@ -393,10 +523,18 @@ static error_t requestCallback(HttpConnection *connection, const char_t *uri)
     xSemaphoreGive(jsonMutex);
     return error;
   }
+  if (get && strcmp(uri, "/api/events") == 0) {
+    if (xSemaphoreTake(jsonMutex, pdMS_TO_TICKS(1000)) != pdTRUE)
+      return httpSendErrorResponse(connection, 503, "Busy");
+    buildEvents(connection->request.queryString);
+    error_t error = jsonOverflow ? httpSendErrorResponse(connection, 500, "Too large") : sendJson(connection, json, jsonLen);
+    xSemaphoreGive(jsonMutex);
+    return error;
+  }
   if (get && strcmp(uri, "/api/history") == 0) {
     if (xSemaphoreTake(jsonMutex, pdMS_TO_TICKS(1000)) != pdTRUE)
       return httpSendErrorResponse(connection, 503, "Busy");
-    error_t error = sendHistory(connection);
+    error_t error = strstr(connection->request.queryString, "range=") ? sendHistory2(connection) : sendHistory(connection);
     xSemaphoreGive(jsonMutex);
     return error;
   }
