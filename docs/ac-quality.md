@@ -56,3 +56,30 @@ supply, contact `STUCK_ON` / `NO_VOLTAGE` faults (need a fault or simulation).
 Development note: each `STM32_Programmer_CLI ... mode=UR ... -rst` flash resets the MCU twice
 (connect under reset + `-rst`), so three flashes within 10 min reach the safe-mode threshold
 (5 resets). Clear with `relay-command.ps1 -Command CLRSAFE`, or flash without `-rst`.
+
+## Graphs (Quality tab)
+
+Owner request 2026-11-25: show power quality as graphs so changes are easy to see. Stages A + B:
+
+- **Live 30 min** (browser): the page keeps the 1 s `/api/status` points while it is open
+  (max 1800): supply voltage with the half-cycle min/max band and the 207/253 V lines, active
+  power, frequency, PF / THD-I / THD-V.
+- **24 h** (board): `pq_history.c` stores one entry per minute, 1440 entries (18 B each,
+  25.9 KB) in a new NOLOAD CCM section `.ccmbss` (linker script), RAM only: lost on reset
+  until the Storage phase. Per entry: mean V, min/max half-cycle V, mean I, P, frequency
+  offset, PF, THD-V, THD-I (`INT16_MIN` = no data).
+  `GET /api/history[?n=N]` returns binary little endian: 16-byte header `PQH1`, version 1,
+  9 fields, entry size 18, period 60 s, count, uptime (s) at the end of the newest entry;
+  then the entries, oldest first. The page converts uptime to wall-clock time using
+  `fw.uptime_ms` from the status.
+- **Waveform**: `GET /api/waveform` = the last mains cycle (128 samples, DC removed) of the
+  reference voltage and the CT current, refreshed every second; JSON with
+  `v_uv_per_count` / `i_ua_per_count` scales. The page starts the plot at the voltage rising
+  zero crossing and refreshes it every 2 s.
+- **Harmonic spectrum**: bar charts of `v_h_x10` / `i_h_x10` (h2–h25, odd in colour).
+
+Canvas drawing only, no external libraries (page gzip 16.7 KB). Charts are drawn only while
+the Quality tab is open. Checked on board 2: waveform peak 333 V at 230 V rms, fs 6396 Hz
+(locked to 49.97 Hz), history returns 1 entry after the first minute, live charts and
+spectrum render from board data (dark theme). Memory: CCM 33.6 KB of 64 KB used; SRAM
+114.4 KB of 128 KB.

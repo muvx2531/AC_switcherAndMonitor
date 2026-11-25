@@ -54,6 +54,10 @@ label.f input,label.f select{color:var(--fg);font-family:var(--mono)}
 .steps{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
 .steps span{padding:4px 10px;border-radius:999px;font-size:12px;background:var(--bg);color:var(--muted)}
 .steps span.done{background:var(--okbg);color:var(--ok)}.steps span.cur{background:var(--infobg);color:var(--info)}.steps span.fail{background:var(--badbg);color:var(--bad)}
+canvas{width:100%;height:150px;display:block}
+.chart{margin-bottom:10px}.ct{font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:8px;margin-bottom:2px}
+.seg{margin-left:auto;display:inline-flex;gap:4px;text-transform:none;letter-spacing:0}.seg button{padding:2px 10px;font-size:12px}.seg button.on{background:var(--infobg);color:var(--info);border-color:var(--info)}
+.key{display:inline-block;width:10px;height:3px;border-radius:2px;margin:0 4px 2px 6px;vertical-align:middle}
 #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);align-items:center;justify-content:center;z-index:9}
 #modal.open{display:flex}
 #modal .card{width:min(420px,92vw)}
@@ -65,6 +69,7 @@ label.f input,label.f select{color:var(--fg);font-family:var(--mono)}
   <h1>SmartSwitch</h1>
   <nav>
     <a href="#status" data-v="status">Status</a>
+    <a href="#quality" data-v="quality">Quality</a>
     <a href="#relays" data-v="relays">Relays</a>
     <a href="#network" data-v="network">Network</a>
     <a href="#firmware" data-v="firmware">Firmware</a>
@@ -103,6 +108,21 @@ label.f input,label.f select{color:var(--fg);font-family:var(--mono)}
     </div>
   </section>
 
+  <section class="view" id="v-quality" hidden>
+    <div class="row r11">
+      <div class="card"><h2>Trend <span class="seg" id="qrange"><button data-r="live" class="on">Live 30 min</button><button data-r="24h">24 h</button></span></h2>
+        <div class="chart"><div class="ct"><span>Supply voltage (V)</span><span id="lv-v"></span></div><canvas id="c-v"></canvas></div>
+        <div class="chart"><div class="ct"><span>Active power, all outputs (W)</span><span id="lv-p"></span></div><canvas id="c-p"></canvas></div>
+        <div class="chart"><div class="ct"><span>Frequency (Hz)</span><span id="lv-f"></span></div><canvas id="c-f"></canvas></div>
+        <div class="chart"><div class="ct"><span><i class="key" style="background:var(--info)"></i>PF x100 <i class="key" style="background:var(--warn)"></i>THD-I % <i class="key" style="background:var(--ok)"></i>THD-V % x10</span><span id="lv-q"></span></div><canvas id="c-q"></canvas></div>
+        <p class="note">Live: 1 s points kept by this browser while the page is open. 24 h: 1-minute averages stored on the board (lost on reset). Voltage band = min/max half-cycle RMS; dashed lines = sag 207 V / swell 253 V.</p></div>
+      <div class="card"><h2>Waveform, one cycle <span class="sub" id="wave-note"></span></h2><canvas id="c-wave" style="height:200px"></canvas>
+        <p class="note"><i class="key" style="background:var(--info)"></i>Voltage (left axis) <i class="key" style="background:var(--warn)"></i>Current (right axis), refreshed every 2 s.</p>
+        <h2 style="margin-top:14px">Voltage harmonics (% of fundamental)</h2><canvas id="c-hv" style="height:110px"></canvas>
+        <h2 style="margin-top:10px">Current harmonics (% of fundamental)</h2><canvas id="c-hi" style="height:110px"></canvas>
+        <p class="note">Harmonics 2-25; odd harmonics in colour. Current harmonics need at least 0.1 A.</p></div>
+    </div>
+  </section>
   <section class="view" id="v-relays" hidden>
     <div class="banner bad" id="relay-na" hidden>Relay control is not available on this firmware (read-only build). Relay commands arrive with the Control service (architecture Phase 2). For bench tests use the serial console.</div>
     <div class="banner info" id="relay-auth">Sign in to send relay commands. Turning a load OFF or power-cycling it asks for your password again.</div>
@@ -379,13 +399,14 @@ $("fwup").onclick = async () => {
 $("fwapply").onclick = () => openModal("Apply firmware", `<p>The board reboots into the new firmware. Relay states are kept. If it does not confirm itself, the previous firmware is restored.</p>`,
   "Apply and reboot", true, async pw => { try { await api("POST", "/api/fw/apply", { password: pw }); } catch (e) { return e.status === 403 ? "Wrong password" : e.message; } });
 
-const VIEWS = ["status", "relays", "network", "firmware"];
+const VIEWS = ["status", "quality", "relays", "network", "firmware"];
 let view = "status";
 function show(v) {
   view = VIEWS.includes(v) ? v : "status";
   for (const n of VIEWS) $("v-" + n).hidden = n !== view;
   document.querySelectorAll("nav a").forEach(a => a.classList.toggle("on", a.dataset.v === view));
   if (view === "firmware") api("GET", "/api/fw/status").then(renderFw).catch(() => {});
+  if (view === "quality" && S.data) { Q.waveAt = 0; refreshQuality(S.data); }
 }
 document.querySelector("nav").onclick = e => {
   const a = e.target.closest("a[data-v]"); if (!a) return;
@@ -426,6 +447,7 @@ async function mockApi(method, path, b) {
   const fail = (status, error, reason) => { throw Object.assign(new Error(error), { status, body: { error, reason } }); };
   const pwOk = pw => pw === "demo";
   if (path === "/api/status") return mockStatus();
+  if (path === "/api/waveform") return mockWave();
   if (path === "/api/login") { if (!pwOk(b.password)) fail(403, "bad password"); return { csrf: "mock-csrf" }; }
   if (path === "/api/logout") return {};
   if (path === "/api/relay") {
@@ -455,12 +477,167 @@ async function mockApi(method, path, b) {
   fail(404, "not found");
 }
 
+/* ---- Quality tab: canvas charts, no external libraries ---- */
+const Q = { range: "live", live: [], hist: null, histAt: 0, wave: null, waveAt: 0 };
+const LIVE_MAX = 1800;
+const cv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function prep(c) {
+  const dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight || 150;
+  if (!w) return null;
+  c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+  const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  g.font = "11px system-ui,sans-serif"; return { g, w, h };
+}
+function niceRange(lo, hi, minSpan) {
+  if (!isFinite(lo)) return [0, 1];
+  if (hi - lo < minSpan) { const m = (hi + lo) / 2; lo = m - minSpan / 2; hi = m + minSpan / 2; }
+  const pad = (hi - lo) * 0.08; return [lo - pad, hi + pad];
+}
+/* o: {t:[ms], now, span(ms), series:[{y:[],c,w}], band:{lo:[],hi:[],c}, hl:[{y,c}], minSpan, dig} */
+function lineChart(c, o) {
+  const p = prep(c); if (!p) return; const { g, w, h } = p, L = 44, R = 8, T = 6, B = 16, pw = w - L - R, ph = h - T - B;
+  let lo = Infinity, hi = -Infinity;
+  const take = v => { if (v != null && isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } };
+  o.series.forEach(s => s.y.forEach(take)); if (o.band) { o.band.lo.forEach(take); o.band.hi.forEach(take); }
+  [lo, hi] = niceRange(lo, hi, o.minSpan || 1);
+  const X = t => L + pw * (1 - (o.now - t) / o.span), Y = v => T + ph * (1 - (v - lo) / (hi - lo));
+  g.strokeStyle = cv("--line"); g.fillStyle = cv("--muted"); g.lineWidth = 1; g.textAlign = "right"; g.textBaseline = "middle";
+  for (let k = 0; k <= 4; k++) { const v = lo + (hi - lo) * k / 4, y = Y(v); g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.fillText(v.toFixed(o.dig ?? 1), L - 4, y); }
+  g.textAlign = "center"; g.textBaseline = "top";
+  const step = o.span > 3 * 3600e3 ? 4 * 3600e3 : o.span > 3600e3 ? 600e3 : 300e3;
+  for (let a = 0; a <= o.span; a += step) g.fillText(a === 0 ? "now" : "-" + (a >= 3600e3 ? (a / 3600e3) + "h" : (a / 60e3) + "m"), X(o.now - a), T + ph + 3);
+  g.save(); g.beginPath(); g.rect(L, T, pw, ph); g.clip();
+  (o.hl || []).forEach(l => { if (l.y < lo || l.y > hi) return; g.setLineDash([4, 4]); g.strokeStyle = l.c; g.beginPath(); g.moveTo(L, Y(l.y)); g.lineTo(L + pw, Y(l.y)); g.stroke(); g.setLineDash([]); });
+  if (o.band) {   /* filled min/max band, split at gaps */
+    g.fillStyle = o.band.c; let seg = [];
+    const flush = () => {
+      if (seg.length > 1) {
+        g.beginPath(); seg.forEach((k, j) => j ? g.lineTo(X(o.t[k]), Y(o.band.hi[k])) : g.moveTo(X(o.t[k]), Y(o.band.hi[k])));
+        for (let j = seg.length - 1; j >= 0; j--) g.lineTo(X(o.t[seg[j]]), Y(o.band.lo[seg[j]]));
+        g.closePath(); g.fill();
+      }
+      seg = [];
+    };
+    o.t.forEach((_, k) => (o.band.lo[k] == null || o.band.hi[k] == null) ? flush() : seg.push(k)); flush();
+  }
+  o.series.forEach(s => {
+    g.strokeStyle = s.c; g.lineWidth = s.w || 1.5; g.beginPath(); let pen = false;
+    o.t.forEach((t, k) => { const v = s.y[k]; if (v == null) { pen = false; return; } const x = X(t), y = Y(v); pen ? g.lineTo(x, y) : g.moveTo(x, y); pen = true; });
+    g.stroke();
+  });
+  g.restore();
+}
+function barChart(c, vals, minMax, color) {
+  const p = prep(c); if (!p) return; const { g, w, h } = p, L = 34, B = 14, T = 4, pw = w - L - 4, ph = h - B - T;
+  if (!vals) { g.fillStyle = cv("--muted"); g.textAlign = "center"; g.fillText("not available", w / 2, h / 2); return; }
+  const mx = Math.max(minMax, ...vals) * 1.1, bw = pw / vals.length;
+  g.strokeStyle = cv("--line"); g.fillStyle = cv("--muted"); g.textAlign = "right"; g.textBaseline = "middle";
+  for (let k = 0; k <= 2; k++) { const v = mx * k / 2, y = T + ph * (1 - k / 2); g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.fillText(v.toFixed(v < 10 ? 1 : 0), L - 4, y); }
+  g.textAlign = "center"; g.textBaseline = "top";
+  vals.forEach((v, k) => {
+    const hn = k + 2, x = L + k * bw, bh = ph * v / mx;
+    g.fillStyle = hn % 2 ? color : cv("--muted"); g.fillRect(x + 1, T + ph - bh, Math.max(1, bw - 2), bh);
+    if (hn % 2 && (hn <= 15 || hn % 4 === 1)) { g.fillStyle = cv("--muted"); g.fillText(hn, x + bw / 2, T + ph + 2); }
+  });
+}
+function waveChart(c, wv) {
+  const p = prep(c); if (!p) return; const { g, w, h } = p, L = 40, R = 40, T = 6, B = 14, pw = w - L - R, ph = h - T - B;
+  if (!wv || wv.ref_line < 0) { g.fillStyle = cv("--muted"); g.textAlign = "center"; g.fillText("no reference line (all outputs off?)", w / 2, h / 2); return; }
+  const vs = wv.v_uv_per_count / 1e6, is = wv.i_ua_per_count / 1e6, n = wv.v.length;
+  let z = 0; for (let k = 0; k < n; k++) if (wv.v[(k + n - 1) % n] < 0 && wv.v[k] >= 0) { z = k; break; }   /* start at V rising zero */
+  const V = wv.v.map((_, k) => wv.v[(k + z) % n] * vs), I = wv.i.map((_, k) => wv.i[(k + z) % n] * is);
+  const vm = Math.max(50, ...V.map(Math.abs)) * 1.1, im = Math.max(0.2, ...I.map(Math.abs)) * 1.1;
+  const X = k => L + pw * k / (n - 1), YV = v => T + ph / 2 - ph / 2 * v / vm, YI = v => T + ph / 2 - ph / 2 * v / im;
+  g.strokeStyle = cv("--line"); g.fillStyle = cv("--muted"); g.lineWidth = 1; g.textBaseline = "middle";
+  [-1, -0.5, 0, 0.5, 1].forEach(f => {
+    const y = T + ph / 2 - ph / 2 * f; g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke();
+    g.textAlign = "right"; g.fillText((vm * f).toFixed(0), L - 4, y); g.textAlign = "left"; g.fillText((im * f).toFixed(im < 2 ? 2 : 1), L + pw + 4, y);
+  });
+  g.textAlign = "center"; g.textBaseline = "top"; [0, 90, 180, 270, 360].forEach(d => g.fillText(d + "°", L + pw * d / 360, T + ph + 2));
+  [[V, YV, "--info"], [I, YI, "--warn"]].forEach(([arr, Y, col]) => {
+    g.strokeStyle = cv(col); g.lineWidth = 1.8; g.beginPath(); arr.forEach((v, k) => k ? g.lineTo(X(k), Y(v)) : g.moveTo(X(k), Y(v))); g.stroke();
+  });
+}
+function livePoint(d) {
+  const a = d.acq, p = a && a.pq; if (!p) return;
+  const ref = p.ref_line >= 0 && a.ac[p.ref_line].state === "VALID" ? a.ac[p.ref_line].v_x10 / 10 : null, e = p.events;
+  Q.live.push({ t: Date.now(), v: ref, lo: e.active ? e.supply_min_dv / 10 : null, hi: e.active ? e.supply_max_dv / 10 : null,
+    p: p.p_dw == null ? null : p.p_dw / 10, f: p.freq_mhz == null ? null : p.freq_mhz / 1000,
+    pf: p.pf_x1000 == null ? null : p.pf_x1000 / 1000, ti: p.i_thd_x10 == null ? null : p.i_thd_x10 / 10, tv: p.v_thd_x10 == null ? null : p.v_thd_x10 });
+  if (Q.live.length > LIVE_MAX) Q.live.splice(0, Q.live.length - LIVE_MAX);
+}
+function parseHistory(buf, uptimeMs) {
+  const dv = new DataView(buf), M16 = -32768;
+  if (buf.byteLength < 16 || String.fromCharCode(...new Uint8Array(buf, 0, 4)) !== "PQH1") return [];
+  const es = dv.getUint8(6), per = dv.getUint16(8, true), n = dv.getUint16(10, true), end = dv.getUint32(12, true), out = [];
+  for (let k = 0; k < n; k++) {
+    const o = 16 + k * es, r = j => { const v = dv.getInt16(o + 2 * j, true); return v === M16 ? null : v; };
+    const tEnd = end - (n - 1 - k) * per, t = Date.now() - (uptimeMs / 1000 - tEnd) * 1000;
+    const v = r(0), lo = r(1), hi = r(2), pw = r(4), f = r(5), pf = r(6), tv = r(7), ti = r(8);
+    out.push({ t, v: v == null ? null : v / 10, lo: lo == null ? null : lo / 10, hi: hi == null ? null : hi / 10, p: pw == null ? null : pw / 10,
+      f: f == null ? null : 50 + f / 1000, pf: pf == null ? null : pf / 1000, ti: ti == null ? null : ti / 10, tv });
+  }
+  return out;
+}
+async function apiBin(path) {
+  if (useMock) return mockHistory();
+  const r = await fetch(path, { cache: "no-store" }); if (!r.ok) throw new Error(r.status); return r.arrayBuffer();
+}
+async function refreshQuality(d) {
+  if (view !== "quality") return;
+  const now = Date.now();
+  if (now - Q.waveAt > 2000) { Q.waveAt = now; try { Q.wave = await api("GET", "/api/waveform"); } catch (e) { Q.wave = null; } }
+  if (Q.range === "24h" && now - Q.histAt > 60000) { Q.histAt = now; try { Q.hist = parseHistory(await apiBin("/api/history"), d.fw.uptime_ms); } catch (e) { Q.hist = []; } }
+  const pts = Q.range === "live" ? Q.live : (Q.hist || []), span = Q.range === "live" ? 30 * 60e3 : 24 * 3600e3;
+  const col = k => pts.map(x => x[k]), t = col("t"), last = pts.length ? pts[pts.length - 1] : {};
+  const fmt = (v, dg, u) => v == null ? "—" : v.toFixed(dg) + u;
+  $("lv-v").textContent = fmt(last.v, 1, " V"); $("lv-p").textContent = fmt(last.p, 1, " W"); $("lv-f").textContent = fmt(last.f, 3, " Hz");
+  $("lv-q").textContent = "PF " + fmt(last.pf, 3, "") + " · THD-I " + fmt(last.ti, 1, " %");
+  lineChart($("c-v"), { t, now, span, series: [{ y: col("v"), c: cv("--info"), w: 1.8 }], band: { lo: col("lo"), hi: col("hi"), c: cv("--infobg") },
+    hl: [{ y: 207, c: cv("--warn") }, { y: 253, c: cv("--warn") }], minSpan: 6 });
+  lineChart($("c-p"), { t, now, span, series: [{ y: col("p"), c: cv("--warn"), w: 1.8 }], minSpan: 10 });
+  lineChart($("c-f"), { t, now, span, series: [{ y: col("f"), c: cv("--ok"), w: 1.5 }], minSpan: 0.1, dig: 2 });
+  const pf100 = col("pf").map(v => v == null ? null : v * 100);
+  lineChart($("c-q"), { t, now, span, series: [{ y: pf100, c: cv("--info") }, { y: col("ti"), c: cv("--warn") }, { y: col("tv"), c: cv("--ok") }], minSpan: 10, dig: 0 });
+  const p = d.acq && d.acq.pq;
+  waveChart($("c-wave"), Q.wave);
+  $("wave-note").textContent = Q.wave && Q.wave.ref_line >= 0 ? "line " + (Q.wave.ref_line + 1) + ", " + (Q.wave.fs_mhz / 1e6).toFixed(2) + " kS/s" : "";
+  barChart($("c-hv"), p && p.v_h_x10 ? p.v_h_x10.map(v => v / 10) : null, 1, cv("--info"));
+  barChart($("c-hi"), p && p.i_h_x10 ? p.i_h_x10.map(v => v / 10) : null, 10, cv("--warn"));
+}
+document.getElementById("qrange").onclick = e => {
+  const b = e.target.closest("button[data-r]"); if (!b) return;
+  Q.range = b.dataset.r; Q.histAt = 0;
+  document.querySelectorAll("#qrange button").forEach(x => x.classList.toggle("on", x === b));
+  if (S.data) refreshQuality(S.data);
+};
+function mockHistory() {
+  const n = 1440, buf = new ArrayBuffer(16 + n * 18), dv = new DataView(buf), up = (Date.now() - M.t0 + 8500) / 1000;
+  "PQH1".split("").forEach((ch, k) => dv.setUint8(k, ch.charCodeAt(0))); dv.setUint8(4, 1); dv.setUint8(5, 9); dv.setUint8(6, 18);
+  dv.setUint16(8, 60, true); dv.setUint16(10, n, true); dv.setUint32(12, Math.floor(up), true);
+  for (let k = 0; k < n; k++) {
+    const o = 16 + k * 18, ph = k / n * 2 * Math.PI, dip = k % 97 === 0, v = 2290 + 40 * Math.sin(ph * 2) + (dip ? -300 : 0);
+    const w = [v, v - 20 + (dip ? -400 : 0), v + 25, 560 + 200 * Math.max(0, Math.sin(ph)), 650 + 400 * Math.max(0, Math.sin(ph)), 15 * Math.sin(ph * 5), 500 + 100 * Math.sin(ph), 5, 1600];
+    w.forEach((x, j) => dv.setInt16(o + 2 * j, Math.round(x), true));
+  }
+  return Promise.resolve(buf);
+}
+function mockWave() {
+  const v = [], i = [];
+  for (let k = 0; k < 128; k++) {
+    const a = 2 * Math.PI * k / 128, s = Math.sin(a);
+    v.push(Math.round(2216 * s + 30 * Math.sin(3 * a)));
+    i.push(Math.round(Math.abs(s) > 0.85 ? Math.sign(s) * 210 * (Math.abs(s) - 0.85) / 0.15 : 0));
+  }
+  return { seq: 1, ref_line: 0, fs_mhz: 6400000, v_uv_per_count: 146557, i_ua_per_count: 7330, v, i };
+}
+
 let failures = 0;
 function setConn(t, c) { const e = $("conn"); e.textContent = t; e.className = "badge " + c; }
 async function tick() {
   try {
     const d = await Promise.race([api("GET", "/api/status"), new Promise((_, r) => setTimeout(() => r(new Error("timeout")), 2500))]);
-    S.data = d; renderStatus(d); renderRelayCtl();
+    S.data = d; renderStatus(d); renderRelayCtl(); livePoint(d); refreshQuality(d);
     if (view === "firmware") { try { renderFw(await api("GET", "/api/fw/status")); } catch (e) { } }
     failures = 0; document.body.classList.remove("stale"); setConn(useMock ? "Mock data · password: demo" : "Live", useMock ? "warn" : "ok");
   } catch (e) { if (++failures >= 2) { document.body.classList.add("stale"); setConn("Disconnected", "bad"); } }

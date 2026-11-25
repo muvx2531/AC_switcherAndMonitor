@@ -9,6 +9,7 @@
 #include "pca9536.h"
 #include "acquisition.h"
 #include "power.h"
+#include "pq_history.h"
 #include "w25q128.h"
 #include "boot.h"
 #include "supervisor.h"
@@ -318,6 +319,58 @@ static error_t handleOutcome(HttpConnection *connection)
   return sendJsonStatus(connection, 200, reply);
 }
 
+/* GET /api/waveform: one mains cycle, built in the shared JSON buffer (jsonMutex held). */
+static void buildWaveform(void)
+{
+  static AcqWaveform w;            /* static: too large for the HTTP connection stack */
+  Acquisition_GetWaveform(&w);
+  jsonLen = 0U; jsonOverflow = false;
+  put("{\"seq\":%lu,\"ref_line\":%d,\"fs_mhz\":%lu,\"v_uv_per_count\":%lu,\"i_ua_per_count\":%lu,\"v\":[",
+      (unsigned long)w.seq, (int)w.ref_line, (unsigned long)(w.fs * 1000.0f),
+      (unsigned long)(w.v_per_count * 1e6f), (unsigned long)(w.a_per_count * 1e6f));
+  for (unsigned int k = 0; k < 128U; k++) put("%s%d", k ? "," : "", w.v[k]);
+  put("],\"i\":[");
+  for (unsigned int k = 0; k < 128U; k++) put("%s%d", k ? "," : "", w.i[k]);
+  put("]}");
+}
+
+/* GET /api/history[?n=N]: binary, little endian. 16-byte header
+ * "PQH1", u8 version 1, u8 fields 9, u16 entry size 18, u16 period s, u16 count,
+ * u32 uptime s at the end of the newest entry; then count x HistEntry, oldest first. */
+static error_t sendHistory(HttpConnection *connection)
+{
+  uint32_t total = History_Count(), n = total;
+  const char *q = connection->request.queryString;
+  if (strncmp(q, "n=", 2) == 0) {
+    uint32_t v = 0;
+    for (const char *p = q + 2; *p >= '0' && *p <= '9' && v < 100000U; p++) v = v * 10U + (uint32_t)(*p - '0');
+    if (v < n) n = v;
+  }
+  uint32_t first = total - n;
+  uint8_t hdr[16] = { 'P', 'Q', 'H', '1', 1U, 9U, (uint8_t)sizeof(HistEntry), 0U,
+      (uint8_t)HIST_PERIOD_S, (uint8_t)(HIST_PERIOD_S >> 8), (uint8_t)n, (uint8_t)(n >> 8) };
+  uint32_t endS = History_NewestEndS();
+  memcpy(&hdr[12], &endS, 4);
+  connection->response.statusCode = 200;
+  connection->response.contentType = "application/octet-stream";
+  connection->response.chunkedEncoding = FALSE;
+  connection->response.contentLength = sizeof(hdr) + n * sizeof(HistEntry);
+  connection->response.noCache = TRUE;
+  error_t error = httpWriteHeader(connection);
+  if (!error) error = httpWriteStream(connection, hdr, sizeof(hdr));
+  static HistEntry chunk[32];      /* static: HTTP stack is small; one sender at a time (mutex) */
+  for (uint32_t i = 0; !error && i < n; ) {
+    uint32_t c = 0;
+    while (c < 32U && i < n) {
+      if (!History_Get(first + i, &chunk[c])) memset(&chunk[c], 0x80, sizeof(HistEntry));
+      c++; i++;
+    }
+    error = httpWriteStream(connection, chunk, c * sizeof(HistEntry));
+  }
+  if (!error) error = httpCloseStream(connection);
+  return error;
+}
+
 static error_t requestCallback(HttpConnection *connection, const char_t *uri)
 {
   if (strncmp(uri, "/api/", 5) != 0) return ERROR_NOT_FOUND;  /* static page from res.c */
@@ -329,6 +382,21 @@ static error_t requestCallback(HttpConnection *connection, const char_t *uri)
     buildStatus();
     error_t error = jsonOverflow ? httpSendErrorResponse(connection, 500, "Status too large")
                                  : sendJson(connection, json, jsonLen);
+    xSemaphoreGive(jsonMutex);
+    return error;
+  }
+  if (get && strcmp(uri, "/api/waveform") == 0) {
+    if (xSemaphoreTake(jsonMutex, pdMS_TO_TICKS(1000)) != pdTRUE)
+      return httpSendErrorResponse(connection, 503, "Busy");
+    buildWaveform();
+    error_t error = jsonOverflow ? httpSendErrorResponse(connection, 500, "Too large") : sendJson(connection, json, jsonLen);
+    xSemaphoreGive(jsonMutex);
+    return error;
+  }
+  if (get && strcmp(uri, "/api/history") == 0) {
+    if (xSemaphoreTake(jsonMutex, pdMS_TO_TICKS(1000)) != pdTRUE)
+      return httpSendErrorResponse(connection, 503, "Busy");
+    error_t error = sendHistory(connection);
     xSemaphoreGive(jsonMutex);
     return error;
   }

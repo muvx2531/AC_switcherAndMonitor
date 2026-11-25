@@ -2,6 +2,7 @@
 #include "debug_log.h"
 #include "supervisor.h"
 #include "power_quality.h"
+#include "pq_history.h"
 #include "main.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -60,6 +61,8 @@ static Window win;
 static AcqSnapshot snap;           /* published copy, guarded by a critical section */
 static TickType_t snapTick[ACQ_AC_CHANNELS + 2U];   /* compute time per signal: ac[0..3], ct, vbat */
 static PqWindowSetup pqNext;       /* power-quality setup for the next window */
+static int16_t wfV[128], wfI[128];  /* last 128 raw samples (ref line P-N, CT), by cycle phase */
+static AcqWaveform wfPub;           /* published, guarded by a critical section */
 static float windowFs = (float)SAMPLE_HZ;
 
 /* ---- hardware ------------------------------------------------------------ */
@@ -158,6 +161,9 @@ static void accumulate(unsigned int half, uint32_t base, bool contiguous)
     uint32_t w = p[4];
     uint16_t ct = (uint16_t)(w & 0xFFFFU), vb = (uint16_t)(w >> 16);
     Pq_Sample(dv, (int32_t)ct, base + s);
+    unsigned int ph = (base + s) & 127U;
+    wfV[ph] = (int16_t)(pqNext.ref_line >= 0 ? dv[pqNext.ref_line] : 0);
+    wfI[ph] = (int16_t)ct;
     win.ctSum += ct;
     win.ctSumsq += (uint64_t)ct * ct;
     if (ct <= ADC_LOW_RAIL || ct >= ADC_HIGH_RAIL) win.ctRail = true;
@@ -235,6 +241,24 @@ static void finishWindow(uint32_t nextIdx)
     lineDv[ch] = s.ac_v[ch].validity == ACQ_VALID ? s.ac_v[ch].value : -1;
   }
   int curRef = pqNext.ref_line;
+  {
+    /* waveform of this window's last cycle, DC removed with this window's means */
+    float dcv = curRef >= 0 ? (float)win.sum[curRef] / (float)n : 0.0f, dci = (float)win.ctSum / (float)n;
+    static int16_t v[128], i[128];
+    for (unsigned int k = 0; k < 128U; k++) {
+      v[k] = curRef >= 0 ? (int16_t)lroundf((float)wfV[k] - dcv) : 0;
+      i[k] = (int16_t)lroundf((float)wfI[k] - dci);
+    }
+    taskENTER_CRITICAL();
+    memcpy(wfPub.v, v, sizeof(v));
+    memcpy(wfPub.i, i, sizeof(i));
+    wfPub.ref_line = (int8_t)curRef;
+    wfPub.fs = windowFs;
+    wfPub.v_per_count = VOLT_PER_COUNT * 200.1f;
+    wfPub.a_per_count = CT_MA_PER_COUNT / 1000.0f;
+    wfPub.seq++;
+    taskEXIT_CRITICAL();
+  }
   Pq_EndWindow(n, windowFs, curRef >= 0 ? lineRms[curRef] : 0.0f, ctRms, s.ct.validity == ACQ_VALID, lineDv, &s.pq);
   for (unsigned int ch = 0; ch < ACQ_AC_CHANNELS; ch++) {
     pqNext.line_valid[ch] = lineDv[ch] >= 0;
@@ -258,6 +282,7 @@ static void finishWindow(uint32_t nextIdx)
   snap.cal_version = s.cal_version;
   snap.pq = s.pq;
   taskEXIT_CRITICAL();
+  History_AddSecond(&s);
   memset(&win, 0, sizeof(win));
 }
 
@@ -351,6 +376,14 @@ void Acquisition_GetSnapshot(AcqSnapshot *out)
   for (unsigned int ch = 0; ch < ACQ_AC_CHANNELS; ch++) age(&out->ac_v[ch], t[ch], now);
   age(&out->ct, t[ACQ_AC_CHANNELS], now);
   age(&out->vbat, t[ACQ_AC_CHANNELS + 1U], now);
+}
+
+void Acquisition_GetWaveform(AcqWaveform *out)
+{
+  if (out == NULL) return;
+  taskENTER_CRITICAL();
+  *out = wfPub;
+  taskEXIT_CRITICAL();
 }
 
 const char *Acquisition_EventName(AcqPqEvent e)

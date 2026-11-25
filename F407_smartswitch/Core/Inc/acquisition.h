@@ -99,11 +99,22 @@ typedef struct {
   AcqPq pq;
 } AcqSnapshot;
 
+/* One mains cycle (128 samples, DC removed) of the reference voltage and the CT current,
+ * refreshed every second. v in (P-N) counts, i in CT counts. */
+typedef struct {
+  int8_t ref_line;          /* -1: no reference line, v is zero */
+  uint32_t seq;             /* increments on each refresh */
+  float fs;                 /* sample rate used, Hz */
+  float v_per_count, a_per_count;
+  int16_t v[128], i[128];
+} AcqWaveform;
+
 /* Call once from the default task after the RTOS is running. */
 bool Acquisition_Start(void);
 /* Any task. Copies the latest snapshot and fills age/STALE. */
 void Acquisition_GetSnapshot(AcqSnapshot *out);
 const char *Acquisition_ValidityName(AcqValidity v);
+void Acquisition_GetWaveform(AcqWaveform *out);
 const char *Acquisition_EventName(AcqPqEvent e);
 const char *Acquisition_ContactName(AcqPqContact c);
 

@@ -170,6 +170,15 @@ SECTIONS
     _eccmram = .;       /* create a global symbol at ccmram end */
   } >CCMRAM AT> FLASH
 
+  /* SmartSwitch: large uninitialized CCM buffers (no flash image, not zeroed). */
+  .ccmbss (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.ccmbss)
+    *(.ccmbss*)
+    . = ALIGN(4);
+  } >CCMRAM
+
   /* Uninitialized data section into "RAM" Ram type memory */
   . = ALIGN(4);
   .bss :
