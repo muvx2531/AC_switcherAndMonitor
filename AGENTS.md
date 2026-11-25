@@ -54,6 +54,8 @@ Phase 4 (`docs/phase4-power.md`): `power.c` owns the ETH (PE0, via `EthProbe_Sus
 and AMC (PC10) rails; ETH is off while 24 V is absent. Tasks register with the Supervisor by
 calling `Supervisor_TaskHeartbeat` (< 2 s). Five resets within 10 min (also quick reflashes)
 enter safe mode; clear with serial `CLRSAFE`.
+AC power quality (`power_quality.c`, `docs/ac-quality.md`) runs inside the Acquisition task.
+Each CLI flash with `mode=UR ... -rst` counts as two resets toward safe mode.
 Fit the DIS_WDT jumper before flashing images larger than 128 KB (sector erase > WDT timeout).
 
 For the temporary USART6 command interface, read docs/serial-protocol.md. SET can actuate relays; checksum is not authentication.

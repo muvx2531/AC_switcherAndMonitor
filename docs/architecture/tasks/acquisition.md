@@ -22,6 +22,9 @@
 
 mapping ยืนยันจาก schematic แล้ว ([open-items H6](../open-items.md)) **สถานะ implement:** `docs/phase3-acquisition.md` (VBAT เป็น rank ปกติของ ADC2 เฉลี่ย 1 s ไม่ใช่ injected; บอร์ดที่ไม่ได้ลง AMC3330 ตั้ง `ACQ_AMC_FITTED 0` ช่อง AC เป็น `NOT_FITTED`)
 
+## Power quality
+ส่วนขยาย 2026-11-25: ความถี่ + ล็อก sampling 128×f, THD/harmonic, P/S/Q/PF, พลังงาน, event sag/swell/ไฟดับ และตรวจหน้าสัมผัสรีเลย์ ดู `docs/ac-quality.md` (CT อยู่ที่สายเข้าบอร์ด = กำลังรวมทั้ง 4 ช่อง)
+
 ## Input
 - คำสั่งจาก Power: เปิด/ปิดการวัด AC ตามสถานะ rail AMC (PC10 เป็นของ Power)
 

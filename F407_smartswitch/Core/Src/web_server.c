@@ -18,7 +18,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define JSON_SIZE 3072U
+#define JSON_SIZE 4096U
 #define MAX_TASKS 16U
 
 static HttpServerSettings settings;
@@ -120,7 +120,36 @@ static void buildStatus(void)
       put("%s{\"state\":\"%s\",\"v_x10\":null,\"rms_raw\":%u}", i ? "," : "",
           Acquisition_ValidityName(a.ac_v[i].validity), a.ac_v[i].raw);
   }
-  put("]},");
+  put("],");
+  const AcqPq *q = &a.pq;
+  put("\"pq\":{\"freq_mhz\":");
+  if (q->freq_valid) put("%lu", (unsigned long)q->freq_mhz); else put("null");
+  put(",\"synced\":%s,\"ref_line\":%d,", q->synced ? "true" : "false", (int)q->ref_line);
+  if (q->v_valid) {
+    put("\"v_thd_x10\":%u,\"v_crest_x100\":%u,\"v_h_x10\":[", q->v_thd_x10, q->v_crest_x100);
+    for (unsigned int k = 0; k < ACQ_PQ_HARMONICS - 1U; k++) put("%s%u", k ? "," : "", q->v_h_x10[k]);
+    put("],");
+  } else put("\"v_thd_x10\":null,\"v_crest_x100\":null,\"v_h_x10\":null,");
+  if (q->i_valid) {
+    put("\"i_thd_x10\":%u,\"i_crest_x100\":%u,\"i_h_x10\":[", q->i_thd_x10, q->i_crest_x100);
+    for (unsigned int k = 0; k < ACQ_PQ_HARMONICS - 1U; k++) put("%s%u", k ? "," : "", q->i_h_x10[k]);
+    put("],");
+  } else put("\"i_thd_x10\":null,\"i_crest_x100\":null,\"i_h_x10\":null,");
+  if (q->p_valid) put("\"p_dw\":%ld,\"s_dva\":%ld,\"q_dvar\":%ld,", (long)q->p_dw, (long)q->s_dva, (long)q->q_dvar);
+  else put("\"p_dw\":null,\"s_dva\":null,\"q_dvar\":null,");
+  if (q->pf_valid) put("\"pf_x1000\":%d,\"dpf_x1000\":%d,", q->pf_x1000, q->dpf_x1000);
+  else put("\"pf_x1000\":null,\"dpf_x1000\":null,");
+  put("\"energy_mwh\":%lu,\"ct_reversed\":%s,", (unsigned long)(q->energy_uwh / 1000U), q->ct_reversed ? "true" : "false");
+  put("\"events\":{\"active\":%s,\"supply_min_dv\":%u,\"supply_max_dv\":%u,\"sag\":%lu,\"swell\":%lu,\"interruption\":%lu,",
+      q->events_active ? "true" : "false", q->supply_min_dv, q->supply_max_dv,
+      (unsigned long)q->sag_count, (unsigned long)q->swell_count, (unsigned long)q->interruption_count);
+  if (q->last.type != PQ_EV_NONE)
+    put("\"last\":{\"type\":\"%s\",\"start_ms\":%lu,\"duration_ms\":%lu,\"extreme_dv\":%u,\"active\":%s,\"open_ended\":%s}},",
+        Acquisition_EventName(q->last.type), (unsigned long)q->last.start_ms, (unsigned long)q->last.duration_ms,
+        q->last.extreme_dv, q->last.active ? "true" : "false", q->last.open_ended ? "true" : "false");
+  else put("\"last\":null},");
+  put("\"contact\":[\"%s\",\"%s\",\"%s\",\"%s\"]}},", Acquisition_ContactName(q->contact[0]),
+      Acquisition_ContactName(q->contact[1]), Acquisition_ContactName(q->contact[2]), Acquisition_ContactName(q->contact[3]));
 
   put("\"amc_diag\":[%u,%u,%u,%u],", pin(DIAG_S1_GPIO_Port, DIAG_S1_Pin), pin(DIAG_S2_GPIO_Port, DIAG_S2_Pin),
       pin(DIAG_S3_GPIO_Port, DIAG_S3_Pin), pin(DIAG_S4_GPIO_Port, DIAG_S4_Pin));

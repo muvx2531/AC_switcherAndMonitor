@@ -86,6 +86,12 @@ label.f input,label.f select{color:var(--fg);font-family:var(--mono)}
       <div class="card"><h2>AC measurement</h2><dl class="kv" id="acq"></dl>
         <p class="note">RMS over 1 s, 6.4 kHz sampling. Not calibrated. A value is shown only when its state is VALID.</p></div>
     </div>
+    <div class="row r11">
+      <div class="card"><h2>Power quality</h2><dl class="kv" id="pq"></dl>
+        <p class="note">CT on the board feed: current and power are the total of all four outputs. Voltage from the reference line. Indicative values (not IEC class A); energy counts from boot.</p></div>
+      <div class="card"><h2>Harmonics (% of fundamental)</h2><table><thead><tr><th>h</th><th class="n">Voltage</th><th class="n">Current</th></tr></thead><tbody id="harm"></tbody></table>
+        <h2 style="margin-top:12px">Supply events</h2><dl class="kv" id="events"></dl></div>
+    </div>
     <div class="row r3">
       <div class="card"><h2>Network</h2><dl class="kv" id="net"></dl></div>
       <div class="card"><h2>SPI flash</h2><dl class="kv" id="flash"></dl></div>
@@ -181,7 +187,10 @@ function relayState(d, ch) {
 function renderStatus(d) {
   $("hdr-id").textContent = `${d.net.mac} · ${d.net.ip || "no IP"} · fw ${d.fw.build}`;
   $("relays").innerHTML = [0, 1, 2, 3].map(ch => { const [m, c, t] = relayState(d, ch);
-    return `<div class="card"><div class="ch">CH${ch + 1}</div><div class="big">${badge(m, c)}</div><p class="note">${t}</p></div>`; }).join("");
+    const ct = d.acq && d.acq.pq ? d.acq.pq.contact[ch] : null;
+    const cb = ct === "OK" ? badge("contact OK", "ok") : ct === "NO_VOLTAGE" ? badge("no voltage", "bad") : ct === "STUCK_ON" ? badge("contact stuck", "bad") : "";
+    const v = d.acq && d.acq.ac[ch].state === "VALID" ? ` · ${(d.acq.ac[ch].v_x10 / 10).toFixed(0)} V` : "";
+    return `<div class="card"><div class="ch">CH${ch + 1}${v}</div><div class="big">${badge(m, c)} ${cb}</div><p class="note">${t}</p></div>`; }).join("");
   $("power").innerHTML = kv([["Vin_Detect (PB3)", lvl(d.power.vin_detect)], ["eFuse_iLim (PB9)", lvl(d.power.efuse_ilim)],
     ["Batt CHRG (PE13)", lvl(d.power.chrg)], ["Batt FAULT (PE11)", lvl(d.power.fault)],
     ...(d.power.mode ? [["Supply mode", badge(d.power.mode, d.power.mode === "MAINS" ? "ok" : "warn")],
@@ -200,6 +209,27 @@ function renderStatus(d) {
       ["Restarts / missed", `${q.restarts} / ${q.missed}`],
       ["DIAG_S1..4", d.amc_diag.map(v => v == null ? "?" : v).join(" ")]]);
   } else $("acq").innerHTML = kv([["Acquisition", badge("not available on this firmware", "neutral")]]);
+  const p = q && q.pq, na = "—";
+  if (p) {
+    const fx = (v, div, dig, unit) => v == null ? na : (v / div).toFixed(dig) + unit;
+    $("pq").innerHTML = kv([
+      ["Frequency", p.freq_mhz == null ? na : (p.freq_mhz / 1000).toFixed(3) + " Hz " + (p.synced ? badge("synced", "ok") : badge("not synced", "warn"))],
+      ["Reference line", p.ref_line >= 0 ? "Line " + (p.ref_line + 1) : badge("none (all off?)", "neutral")],
+      ["Voltage THD", fx(p.v_thd_x10, 10, 1, " %")], ["Voltage crest factor", fx(p.v_crest_x100, 100, 2, "")],
+      ["Current THD", fx(p.i_thd_x10, 10, 1, " %")], ["Current crest factor", fx(p.i_crest_x100, 100, 2, "")],
+      ["Active power P", fx(p.p_dw, 10, 1, " W") + (p.ct_reversed ? " " + badge("CT may be reversed: turn the CT around", "bad") : "")], ["Apparent power S", fx(p.s_dva, 10, 1, " VA")],
+      ["Reactive power Q (fund.)", fx(p.q_dvar, 10, 1, " var")],
+      ["Power factor", fx(p.pf_x1000, 1000, 3, "")], ["Displacement PF (cos φ)", fx(p.dpf_x1000, 1000, 3, "")],
+      ["Energy since boot", (p.energy_mwh / 1e6).toFixed(4) + " kWh"]]);
+    const hs = [3, 5, 7, 9, 11, 13, 15, 2, 4];
+    $("harm").innerHTML = hs.map(h => `<tr><td>${h}</td><td class="n">${p.v_h_x10 ? (p.v_h_x10[h - 2] / 10).toFixed(1) : na}</td><td class="n">${p.i_h_x10 ? (p.i_h_x10[h - 2] / 10).toFixed(1) : na}</td></tr>`).join("");
+    const e = p.events, l = e.last;
+    $("events").innerHTML = kv([
+      ["Monitoring", e.active ? badge("active", "ok") : badge("paused (no line ON)", "neutral")],
+      ["Supply min / max (1 s, ½-cycle RMS)", e.active ? `${(e.supply_min_dv / 10).toFixed(1)} / ${(e.supply_max_dv / 10).toFixed(1)} V` : na],
+      ["Sags / swells / interruptions", `${e.sag} / ${e.swell} / ${e.interruption}`],
+      ["Last event", l ? `${badge(l.type, "warn")} ${(l.duration_ms / 1000).toFixed(2)} s, ${(l.extreme_dv / 10).toFixed(1)} V${l.active ? " (ongoing)" : ""}${l.open_ended ? " (measurement stopped)" : ""}, at uptime ${uptime(l.start_ms)}` : "none"]]);
+  } else { $("pq").innerHTML = kv([["Power quality", badge("not available on this firmware", "neutral")]]); $("harm").innerHTML = ""; $("events").innerHTML = ""; }
   const n = d.net, netRows = [["Link", n.link ? badge("UP", "ok") : badge("DOWN", "bad")], ["Address mode", esc(n.mode.toUpperCase())],
     ["IP", esc(n.ip || "—")], ["Netmask", esc(n.mask || "—")], ["Gateway", esc(n.gw || "—")], ["MAC", esc(n.mac)], ["PHY ID", esc(n.phy_id)]];
   $("net").innerHTML = kv(netRows); $("net2").innerHTML = kv(netRows);
@@ -378,7 +408,12 @@ function mockStatus() {
     power: { vin_detect: on24 ? 1 : 0, efuse_ilim: on24 ? 1 : 0, chrg: 1, fault: 1, mode: on24 ? "MAINS" : "BACKUP", mode_age_s: 5, eth_rail: on24, amc_rail: on24, transitions: 0, eth_resume_fail: 0, reason: "boot" },
     vbat: { ok: true, state: "VALID", raw: 3207 + (t / 1000 % 3 | 0), mv_est: 6553, age_ms: 400 },
     acq: { running: true, restarts: 0, missed: 0, cycles: t / 20 | 0, cal: 0, ct: { state: "VALID", ma: 420 + (t / 1000 % 5 | 0) * 10, dc_raw: 2047 },
-           ac: [0, 1, 2, 3].map(() => ({ state: "NOT_FITTED", v_x10: null })) },
+           ac: [0, 1, 2, 3].map(ch => (M.output >> ch) & 1 && on24 ? { state: "VALID", v_x10: 31, rms_raw: 21 } : { state: "VALID", v_x10: 2296 + ch, rms_raw: 1566 }),
+           pq: { freq_mhz: 49987 + (t / 1000 % 7 | 0), synced: true, ref_line: 0, v_thd_x10: 21, v_crest_x100: 140, v_h_x10: Array.from({ length: 24 }, (_, i) => [2, 15, 3, 9, 2, 6, 1, 4, 1, 3, 1, 2][i] || 1),
+             i_thd_x10: 384, i_crest_x100: 192, i_h_x10: Array.from({ length: 24 }, (_, i) => [3, 310, 4, 180, 3, 90, 2, 50, 2, 30][i] || 5),
+             p_dw: 1032, s_dva: 1290, q_dvar: 210, pf_x1000: 800, dpf_x1000: 980, energy_mwh: 12345 + t / 100 | 0,
+             events: { active: true, supply_min_dv: 2288, supply_max_dv: 2301, sag: 1, swell: 0, interruption: 2, last: { type: "SAG", start_ms: 4000, duration_ms: 120, extreme_dv: 1850, active: false, open_ended: false } },
+             contact: [0, 1, 2, 3].map(ch => (M.output >> ch) & 1 && on24 ? "OK" : "OK") } },
     amc_diag: [1, 1, 1, 0],
     flash: [{ ok: true, jedec: "EF 40 18" }, { ok: true, jedec: "EF 40 18" }],
     sys: { heap_free: 24800, heap_min: 15912, heap_total: 49152, reset_cause: "POWER_ON", reset_count: 0, safe_mode: false, watchdog: { phase: "run", lost: null }, rtc_kept: true, i2c_recoveries: 1, log: { queued: 0, high: 412, dropped: 0, dma_start_err: 0, dma_xfer_err: 0 },

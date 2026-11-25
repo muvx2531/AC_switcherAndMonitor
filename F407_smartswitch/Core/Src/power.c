@@ -15,7 +15,7 @@
 
 static TaskHandle_t task;
 static StaticTask_t tcb;
-static StackType_t stack[384] __attribute__((section(".ccmram")));
+static StackType_t stack[512] __attribute__((section(".ccmram")));  /* holds an AcqSnapshot copy */
 
 static PowerSnapshot snap;
 static TickType_t modeSince;

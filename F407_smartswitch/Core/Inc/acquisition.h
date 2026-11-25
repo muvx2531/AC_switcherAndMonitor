@@ -39,6 +39,53 @@ typedef struct {
   uint32_t age_ms;     /* since the value was computed */
 } AcqSignal;
 
+/* AC power quality (docs/ac-quality.md). Indicative values, not IEC 61000-4-30 class A.
+ * The CT is on the board feed, so current and power are the total of all four outputs;
+ * voltage comes from a "reference" line (first line VALID and > 50 V). */
+#define ACQ_PQ_HARMONICS 25U          /* harmonics 1..25 computed; 2..25 published */
+#define ACQ_NOMINAL_V    230.0f
+#ifndef ACQ_CT_PHASE_DEG
+#define ACQ_CT_PHASE_DEG 0.0f         /* CT + filter phase lead at 50 Hz (calibration) */
+#endif
+
+typedef enum { PQ_EV_NONE = 0, PQ_EV_SAG, PQ_EV_SWELL, PQ_EV_INTERRUPTION } AcqPqEvent;
+typedef enum { PQ_CONTACT_UNKNOWN = 0, PQ_CONTACT_OK, PQ_CONTACT_NO_VOLTAGE, PQ_CONTACT_STUCK_ON } AcqPqContact;
+
+typedef struct {
+  AcqPqEvent type;
+  uint32_t start_ms;       /* uptime at start */
+  uint32_t duration_ms;    /* so far if still active */
+  uint16_t extreme_dv;     /* min (sag/interruption) or max (swell) half-cycle RMS, V x10 */
+  bool active;
+  bool open_ended;         /* measurement stopped (e.g. AMC rail off) before the event ended */
+} AcqPqEventRecord;
+
+typedef struct {
+  bool freq_valid;
+  uint32_t freq_mhz;       /* mains frequency, mHz */
+  bool synced;             /* sampling locked to 128 x mains frequency */
+  int8_t ref_line;         /* 0..3, -1 none */
+  bool v_valid;
+  uint16_t v_thd_x10;      /* THD-F % x10 (harmonics 2..25 vs fundamental) */
+  uint16_t v_crest_x100;
+  uint16_t v_h_x10[ACQ_PQ_HARMONICS - 1U];   /* harmonic 2..25, % of fundamental x10 */
+  bool i_valid;            /* needs >= 0.1 A */
+  uint16_t i_thd_x10;
+  uint16_t i_crest_x100;
+  uint16_t i_h_x10[ACQ_PQ_HARMONICS - 1U];
+  bool p_valid;
+  int32_t p_dw, s_dva, q_dvar;   /* 0.1 W / VA / var; Q = fundamental, + inductive */
+  bool pf_valid;           /* needs >= 0.1 A */
+  int16_t pf_x1000, dpf_x1000;   /* true PF = P/S, displacement PF = cos(phi1) */
+  uint64_t energy_uwh;     /* since boot (RAM only until Storage) */
+  bool ct_reversed;        /* P < -5 W for 3 s: the cabinet has no generation, so the CT is clamped backwards */
+  bool events_active;      /* at least one line is commanded ON and measured */
+  uint16_t supply_min_dv, supply_max_dv;   /* half-cycle RMS min/max over the last window */
+  uint32_t sag_count, swell_count, interruption_count;
+  AcqPqEventRecord last;
+  AcqPqContact contact[ACQ_AC_CHANNELS];
+} AcqPq;
+
 typedef struct {
   bool running;
   uint32_t restarts;       /* sampling restarts after a stall or DMA/ADC error */
@@ -49,6 +96,7 @@ typedef struct {
   AcqSignal vbat;          /* value: mV, mean over 1 s (uncalibrated); raw: mean counts */
   uint8_t diag[ACQ_AC_CHANNELS];   /* raw DIAG_Sx levels (PD8/PD10/PD12/PD14) */
   uint8_t cal_version;     /* 0 = nominal constants, not calibrated */
+  AcqPq pq;
 } AcqSnapshot;
 
 /* Call once from the default task after the RTOS is running. */
@@ -56,5 +104,7 @@ bool Acquisition_Start(void);
 /* Any task. Copies the latest snapshot and fills age/STALE. */
 void Acquisition_GetSnapshot(AcqSnapshot *out);
 const char *Acquisition_ValidityName(AcqValidity v);
+const char *Acquisition_EventName(AcqPqEvent e);
+const char *Acquisition_ContactName(AcqPqContact c);
 
 #endif
