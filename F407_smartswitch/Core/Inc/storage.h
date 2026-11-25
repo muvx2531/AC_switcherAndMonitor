@@ -32,6 +32,7 @@ typedef enum {
   ST_EV_CT_REVERSED,     /* a: 1 set, 0 cleared */
   ST_EV_CONFIG,          /* a: config sequence */
   ST_EV_FORMAT,          /* storage formatted */
+  ST_EV_FIRMWARE,        /* a: boot state (SswBootState), b: result (SswResult), c: version */
 } StEventType;
 
 typedef struct {

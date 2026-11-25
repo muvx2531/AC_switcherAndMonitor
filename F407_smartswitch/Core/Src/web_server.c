@@ -11,6 +11,8 @@
 #include "power.h"
 #include "pq_history.h"
 #include "storage.h"
+#include "fota.h"
+#include "fw_version.h"
 #include "boot.h"
 #include "w25q128.h"
 #include "boot.h"
@@ -60,7 +62,7 @@ static void buildStatus(void)
 {
   jsonLen = 0; jsonOverflow = false;
   uint32_t uptimeMs = (uint32_t)(((uint64_t)xTaskGetTickCount() * 1000U) / configTICK_RATE_HZ);
-  put("{\"fw\":{\"build\":\"%s\",\"uptime_ms\":%lu},", build, (unsigned long)uptimeMs);
+  put("{\"fw\":{\"version\":\"" FW_VERSION_STR "\",\"build\":\"%s\",\"uptime_ms\":%lu},", build, (unsigned long)uptimeMs);
 
   EthInfo n;
   EthProbe_GetInfo(&n);
@@ -501,9 +503,92 @@ static error_t sendHistory2(HttpConnection *connection)
   return error;
 }
 
+/* GET /api/fw/status (jsonMutex held). */
+static void buildFwStatus(void)
+{
+  FotaStatus f;
+  Fota_GetStatus(&f);
+  jsonLen = 0U; jsonOverflow = false;
+  put("{\"running\":{\"version\":\"%lu.%lu.%lu\",\"build\":\"%s\",\"dev\":%s,\"confirmed\":%s},",
+      (unsigned long)(f.run_version >> 16), (unsigned long)((f.run_version >> 8) & 255U), (unsigned long)(f.run_version & 255U),
+      f.run_build, f.run_dev ? "true" : "false", f.state == SSW_BR_TRIAL ? "false" : "true");
+  put("\"bootloader\":%s,\"boot\":{\"state\":\"%s\",\"last_result\":\"%s\",\"last_version\":\"%lu.%lu.%lu\",\"trial_boots\":%lu,\"trial_max\":%u},",
+      f.bootloader_present ? "true" : "false", Fota_StateName(f.state), Fota_ResultName(f.result),
+      (unsigned long)(f.result_version >> 16), (unsigned long)((f.result_version >> 8) & 255U), (unsigned long)(f.result_version & 255U),
+      (unsigned long)f.trial_boots, SSW_TRIAL_MAX_BOOTS);
+  put("\"backup\":{\"present\":%s,\"size\":%lu},", f.backup_size ? "true" : "false", (unsigned long)f.backup_size);
+  put("\"slot\":{\"state\":\"%s\",\"version\":", Fota_SlotName(f.slot));
+  if (f.slot == FOTA_SLOT_VALID)
+    put("\"%lu.%lu.%lu\",\"build\":\"%s\",\"size\":%lu,", (unsigned long)(f.slot_version >> 16),
+        (unsigned long)((f.slot_version >> 8) & 255U), (unsigned long)(f.slot_version & 255U), f.slot_build, (unsigned long)f.slot_size);
+  else put("null,\"build\":null,\"size\":null,");
+  put("\"received\":%lu,\"reason\":", (unsigned long)f.received);
+  if (f.slot_reason) put("\"%s\"", f.slot_reason); else put("null");
+  put("},\"reboot_pending\":%s}", f.reboot_pending ? "true" : "false");
+}
+
+/* POST /api/fw/upload?token=<session>: raw image body (Content-Length), written to the
+ * staging slot while it arrives, then verified. One upload at a time. */
+static error_t handleUpload(HttpConnection *connection)
+{
+  static uint8_t chunk[1024];
+  static volatile bool busy;
+  char token[WEB_AUTH_TOKEN_LEN + 1] = { 0 };
+  const char *q = strstr(connection->request.queryString, "token=");
+  if (q) { strncpy(token, q + 6, WEB_AUTH_TOKEN_LEN); token[WEB_AUTH_TOKEN_LEN] = 0; }
+  if (!WebAuth_CheckToken(token)) return sendJsonStatus(connection, 401, "{\"error\":\"sign in required\"}");
+  if (connection->request.chunkedEncoding) return sendJsonStatus(connection, 411, "{\"error\":\"Content-Length required\"}");
+  taskENTER_CRITICAL();
+  bool mine = !busy; if (mine) busy = true;
+  taskEXIT_CRITICAL();
+  if (!mine) return sendJsonStatus(connection, 409, "{\"error\":\"upload in progress\"}");
+  const char *reason = NULL;
+  uint32_t len = (uint32_t)connection->request.contentLength;
+  bool ok = Fota_UploadBegin(len, &reason);
+  uint32_t got = 0;
+  while (ok && got < len) {
+    size_t n = 0, want = len - got > sizeof(chunk) ? sizeof(chunk) : len - got;
+    if (httpReadStream(connection, chunk, want, &n, HTTP_FLAG_WAIT_ALL) != NO_ERROR || n == 0U) { reason = "connection lost"; ok = false; break; }
+    if (!Fota_UploadWrite(chunk, (uint32_t)n)) { reason = "flash write error"; ok = false; break; }
+    got += (uint32_t)n;
+  }
+  if (ok) ok = Fota_UploadEnd(&reason);
+  else Fota_UploadAbort(reason ? reason : "rejected");
+  busy = false;
+  char reply[160];
+  if (ok) {
+    (void)snprintf(reply, sizeof(reply), "{\"state\":\"VALID\",\"size\":%lu}", (unsigned long)len);
+    return sendJsonStatus(connection, 200, reply);
+  }
+  (void)snprintf(reply, sizeof(reply), "{\"error\":\"rejected\",\"reason\":\"%s\"}", reason ? reason : "error");
+  return sendJsonStatus(connection, 422, reply);
+}
+
+/* POST /api/fw/apply | /api/fw/rollback {token, password} */
+static error_t handleFwAction(HttpConnection *connection, const char *body, bool rollback)
+{
+  char pw[24];
+  if (!jsonString(body, "password", pw, sizeof(pw))) return sendJsonStatus(connection, 400, "{\"error\":\"password required\"}");
+  WebAuthResult a = WebAuth_CheckPassword(pw);
+  memset(pw, 0, sizeof(pw));
+  if (a == AUTH_LOCKED) return sendJsonStatus(connection, 429, "{\"error\":\"too many attempts\"}");
+  if (a != AUTH_OK) return sendJsonStatus(connection, 403, "{\"error\":\"bad password\"}");
+  const char *reason = NULL;
+  bool ok = rollback ? Fota_RequestRollback(&reason) : Fota_RequestInstall(&reason);
+  char reply[140];
+  if (ok) return sendJsonStatus(connection, 200, "{\"rebooting\":true}");
+  (void)snprintf(reply, sizeof(reply), "{\"error\":\"rejected\",\"reason\":\"%s\"}", reason ? reason : "error");
+  return sendJsonStatus(connection, 409, reply);
+}
+
 static error_t requestCallback(HttpConnection *connection, const char_t *uri)
 {
-  if (strncmp(uri, "/api/", 5) != 0) return ERROR_NOT_FOUND;  /* static page from res.c */
+  if (strncmp(uri, "/api/", 5) != 0) {
+    /* Static page from res.c. No caching: after a firmware update the browser must load
+     * the page that matches the new API (CycloneTCP keeps this flag for the static reply). */
+    connection->response.noCache = TRUE;
+    return ERROR_NOT_FOUND;
+  }
   bool get = strcmp(connection->request.method, "GET") == 0;
   bool post = strcmp(connection->request.method, "POST") == 0;
   if (get && strcmp(uri, "/api/status") == 0) {
@@ -538,8 +623,18 @@ static error_t requestCallback(HttpConnection *connection, const char_t *uri)
     xSemaphoreGive(jsonMutex);
     return error;
   }
+  if (get && strcmp(uri, "/api/fw/status") == 0) {
+    if (xSemaphoreTake(jsonMutex, pdMS_TO_TICKS(1000)) != pdTRUE)
+      return httpSendErrorResponse(connection, 503, "Busy");
+    buildFwStatus();
+    error_t error = jsonOverflow ? httpSendErrorResponse(connection, 500, "Too large") : sendJson(connection, json, jsonLen);
+    xSemaphoreGive(jsonMutex);
+    return error;
+  }
+  if (post && strcmp(uri, "/api/fw/upload") == 0) return handleUpload(connection);
   if (get && strcmp(uri, "/api/relay/outcome") == 0) return handleOutcome(connection);
-  if (post && (strcmp(uri, "/api/login") == 0 || strcmp(uri, "/api/logout") == 0 || strcmp(uri, "/api/relay") == 0)) {
+  if (post && (strcmp(uri, "/api/login") == 0 || strcmp(uri, "/api/logout") == 0 || strcmp(uri, "/api/relay") == 0 ||
+               strcmp(uri, "/api/fw/apply") == 0 || strcmp(uri, "/api/fw/rollback") == 0)) {
     char body[256];
     if (!readBody(connection, body, sizeof(body))) return sendJsonStatus(connection, 400, "{\"error\":\"bad body\"}");
     if (strcmp(uri, "/api/login") == 0) return handleLogin(connection, body);
@@ -548,6 +643,8 @@ static error_t requestCallback(HttpConnection *connection, const char_t *uri)
     if (!jsonString(body, "token", token, sizeof(token)) || !WebAuth_CheckToken(token))
       return sendJsonStatus(connection, 401, "{\"error\":\"sign in required\"}");
     if (strcmp(uri, "/api/logout") == 0) { WebAuth_Logout(token); return sendJsonStatus(connection, 200, "{}"); }
+    if (strcmp(uri, "/api/fw/apply") == 0) return handleFwAction(connection, body, false);
+    if (strcmp(uri, "/api/fw/rollback") == 0) return handleFwAction(connection, body, true);
     return handleRelay(connection, body);
   }
   /* Network settings and firmware update come in later phases. */

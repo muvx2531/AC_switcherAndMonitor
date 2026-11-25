@@ -47,17 +47,24 @@ MEMORY
 {
   CCMRAM    (xrw)    : ORIGIN = 0x10000000,   LENGTH = 64K
   RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 128K
-  FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 1024K
+  FLASH    (rx)    : ORIGIN = 0x8008000,   LENGTH = 992K   /* SmartSwitch: bootloader owns 0x08000000-0x08007FFF */
 }
 
 /* Sections */
 SECTIONS
 {
 
-  /* The startup code into "FLASH" Rom type memory */
+  /* SmartSwitch image header (512 B, filled by tools/make_ssw.py for release images) */
+  .ssw_header :
+  {
+    KEEP(*(.ssw_header))
+    . = 0x200;
+  } >FLASH
+
+  /* The startup code into "FLASH" Rom type memory (0x08008200, VTOR needs 512-B alignment) */
   .isr_vector :
   {
-    . = ALIGN(4);
+    . = ALIGN(512);
     KEEP(*(.isr_vector)) /* Startup code */
     . = ALIGN(4);
   } >FLASH
@@ -169,6 +176,9 @@ SECTIONS
     . = ALIGN(4);
     _eccmram = .;       /* create a global symbol at ccmram end */
   } >CCMRAM AT> FLASH
+
+  /* SmartSwitch: end of everything stored in flash (image size for the bootloader) */
+  _ssw_image_end = LOADADDR(.ccmram) + SIZEOF(.ccmram);
 
   /* SmartSwitch: large uninitialized CCM buffers (no flash image, not zeroed). */
   .ccmbss (NOLOAD) :

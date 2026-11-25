@@ -35,6 +35,8 @@
 #include "acquisition.h"
 #include "power.h"
 #include "storage.h"
+#include "ssw_image.h"
+#include "fota.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -129,6 +131,10 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  /* Vector table behind the image header (the bootloader sets it too; also needed when
+   * the debugger starts the application directly). */
+  SCB->VTOR = SSW_APP_ADDR + SSW_APP_VECTOR_OFF;
+  __DSB();
   Boot_CaptureResetCause();
   /* USER CODE END 1 */
 
@@ -912,6 +918,8 @@ void StartDefaultTask(void *argument)
     if (!Storage_Start())
       (void) DebugLog_Printf("STORAGE: not started\r\n");
     Storage_LogEvent(ST_EV_BOOT, (int32_t)Boot_ResetCauseIndex(), (int32_t)Boot_ResetCount(), 0, 0);
+    /* Firmware update state (boot record, staging slot) on flash chip 2. */
+    if (flashInit == W25Q128_OK) Fota_Init();
     /* Acquisition owns ADC1/ADC2, TIM3 and DMA2 Stream0 from here on. Not in safe mode (S6-5). */
     if (!Acquisition_Start())
       (void) DebugLog_Printf("ACQ: start failed\r\n");
@@ -942,6 +950,7 @@ void StartDefaultTask(void *argument)
     HAL_GPIO_TogglePin(LED_Blue_GPIO_Port, LED_Blue_Pin);
     (void) DebugLog_Printf("SmartSwitch: USART6 DMA and LED heartbeat\r\n");
     EthProbe_Report();
+    Fota_Tick();   /* trial confirmation, reboot after install / rollback request */
     osDelay(500);
   }
   /* USER CODE END 5 */
