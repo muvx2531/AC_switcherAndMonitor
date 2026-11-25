@@ -13,6 +13,7 @@ typedef enum {
   SUP_TASK_CONTROL,
   SUP_TASK_ACQ,
   SUP_TASK_POWER,
+  SUP_TASK_STORAGE,
   SUP_TASK_COUNT
 } SupTask;
 

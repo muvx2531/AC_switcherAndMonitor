@@ -3,6 +3,7 @@
 #include "supervisor.h"
 #include "power_quality.h"
 #include "pq_history.h"
+#include "storage.h"
 #include "main.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -61,6 +62,10 @@ static Window win;
 static AcqSnapshot snap;           /* published copy, guarded by a critical section */
 static TickType_t snapTick[ACQ_AC_CHANNELS + 2U];   /* compute time per signal: ac[0..3], ct, vbat */
 static PqWindowSetup pqNext;       /* power-quality setup for the next window */
+static bool amcFitted = ACQ_AMC_FITTED;
+static float ctPhaseDeg = ACQ_CT_PHASE_DEG;
+static uint32_t windowsSinceCheckpoint;
+#define ENERGY_CHECKPOINT_WINDOWS 600U   /* 10 min */
 static int16_t wfV[128], wfI[128];  /* last 128 raw samples (ref line P-N, CT), by cycle phase */
 static AcqWaveform wfPub;           /* published, guarded by a critical section */
 static float windowFs = (float)SAMPLE_HZ;
@@ -210,7 +215,7 @@ static void finishWindow(uint32_t nextIdx)
     s.diag[ch] = readDiag(ch) ? 1U : 0U;
     a->raw = (uint16_t)(rms + 0.5f);
     a->value = (int32_t)(rms * AC_SCALE_X10 + 0.5f);
-    if (!ACQ_AMC_FITTED) a->validity = ACQ_NOT_FITTED;
+    if (!amcFitted) a->validity = ACQ_NOT_FITTED;
     else if (!railOn) a->validity = ACQ_RAIL_OFF;
     else if (now - railOnSince < pdMS_TO_TICKS(RAIL_SETTLE_MS)) a->validity = ACQ_NO_DATA;
     else if (!s.diag[ch] || win.sum[ch] / (int32_t)n < FAILSAFE_COUNTS) a->validity = ACQ_DIAG_FAIL;
@@ -283,6 +288,10 @@ static void finishWindow(uint32_t nextIdx)
   snap.pq = s.pq;
   taskEXIT_CRITICAL();
   History_AddSecond(&s);
+  if (++windowsSinceCheckpoint >= ENERGY_CHECKPOINT_WINDOWS) {
+    windowsSinceCheckpoint = 0U;
+    Storage_CheckpointEnergy(s.pq.energy_uwh);
+  }
   memset(&win, 0, sizeof(win));
 }
 
@@ -303,6 +312,7 @@ static void acquisitionTask(void *arg)
   bool gap = true;                      /* next half does not follow the previous one */
   TickType_t lastRestart = xTaskGetTickCount();
   Pq_Init();
+  Pq_SetEnergy(Storage_RestoredEnergy());
   pqNext.ref_line = -1;
   pqNext.dc_i = 2048.0f;
   Pq_BeginWindow(&pqNext);
@@ -347,13 +357,18 @@ bool Acquisition_Start(void)
 {
   if (task != NULL) return true;
   memset(&snap, 0, sizeof(snap));
+  StConfig cfg;
+  Storage_GetConfig(&cfg);
+  if (cfg.amc_fitted != 0xFFU) amcFitted = cfg.amc_fitted != 0U;
+  ctPhaseDeg = (float)cfg.ct_phase_cdeg / 100.0f;
+  if (cfg.ct_phase_cdeg == 0) ctPhaseDeg = ACQ_CT_PHASE_DEG;
   for (unsigned int ch = 0; ch < ACQ_AC_CHANNELS; ch++)
-    snap.ac_v[ch].validity = ACQ_AMC_FITTED ? ACQ_NO_DATA : ACQ_NOT_FITTED;
+    snap.ac_v[ch].validity = amcFitted ? ACQ_NO_DATA : ACQ_NOT_FITTED;
   /* Below Control (AboveNormal), above the default task and HTTP connections. */
   task = xTaskCreateStatic(acquisitionTask, "acq", sizeof(stack) / sizeof(stack[0]), NULL,
       osPriorityNormal1, stack, &tcb);
   if (task != NULL)
-    (void)DebugLog_Printf("ACQ: dual ADC %u Hz, AMC3330 %s\r\n", SAMPLE_HZ, ACQ_AMC_FITTED ? "fitted" : "not fitted");
+    (void)DebugLog_Printf("ACQ: dual ADC %u Hz, AMC3330 %s\r\n", SAMPLE_HZ, amcFitted ? "fitted" : "not fitted");
   return task != NULL;
 }
 
@@ -377,6 +392,16 @@ void Acquisition_GetSnapshot(AcqSnapshot *out)
   age(&out->ct, t[ACQ_AC_CHANNELS], now);
   age(&out->vbat, t[ACQ_AC_CHANNELS + 1U], now);
 }
+
+bool Acquisition_AmcFitted(void) { return amcFitted; }
+uint64_t Acquisition_EnergyUwh(void)
+{
+  taskENTER_CRITICAL();
+  uint64_t e = snap.pq.energy_uwh;
+  taskEXIT_CRITICAL();
+  return e;
+}
+float Acquisition_CtPhaseDeg(void) { return ctPhaseDeg; }
 
 void Acquisition_GetWaveform(AcqWaveform *out)
 {

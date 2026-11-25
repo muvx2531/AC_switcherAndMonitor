@@ -103,6 +103,9 @@ canvas{width:100%;height:150px;display:block}
       <div class="card"><h2>Debug log</h2><dl class="kv" id="log"></dl></div>
     </div>
     <div class="row r2">
+      <div class="card" style="grid-column:1/-1"><h2>Event log <span class="sub" id="evinfo"></span></h2><table><thead><tr><th>#</th><th>When</th><th>Event</th><th>Details</th></tr></thead><tbody id="events-log"></tbody></table></div>
+    </div>
+    <div class="row r2">
       <div class="card"><h2>Tasks</h2><table><thead><tr><th>Name</th><th class="n">Priority</th><th class="n">Stack free (words)</th></tr></thead><tbody id="tasks"></tbody></table></div>
       <div class="card"><h2>System</h2><dl class="kv" id="sys"></dl><div class="bar"><i id="heap-bar" style="width:0"></i></div><p class="note">Bar = heap currently in use.</p></div>
     </div>
@@ -110,12 +113,12 @@ canvas{width:100%;height:150px;display:block}
 
   <section class="view" id="v-quality" hidden>
     <div class="row r11">
-      <div class="card"><h2>Trend <span class="seg" id="qrange"><button data-r="live" class="on">Live 30 min</button><button data-r="24h">24 h</button></span></h2>
+      <div class="card"><h2>Trend <span class="seg" id="qrange"><button data-r="live" class="on">Live 30 min</button><button data-r="24h">24 h</button><button data-r="7d">7 d</button><button data-r="30d">30 d</button></span></h2>
         <div class="chart"><div class="ct"><span>Supply voltage (V)</span><span id="lv-v"></span></div><canvas id="c-v"></canvas></div>
         <div class="chart"><div class="ct"><span>Active power, all outputs (W)</span><span id="lv-p"></span></div><canvas id="c-p"></canvas></div>
         <div class="chart"><div class="ct"><span>Frequency (Hz)</span><span id="lv-f"></span></div><canvas id="c-f"></canvas></div>
         <div class="chart"><div class="ct"><span><i class="key" style="background:var(--info)"></i>PF x100 <i class="key" style="background:var(--warn)"></i>THD-I % <i class="key" style="background:var(--ok)"></i>THD-V % x10</span><span id="lv-q"></span></div><canvas id="c-q"></canvas></div>
-        <p class="note">Live: 1 s points kept by this browser while the page is open. 24 h: 1-minute averages stored on the board (lost on reset). Voltage band = min/max half-cycle RMS; dashed lines = sag 207 V / swell 253 V.</p></div>
+        <p class="note">Live: 1 s points kept by this browser while the page is open. 24 h / 7 d / 30 d: stored on the board's flash (1-minute records, about 90 days), averaged into 1, 10 or 30-minute points; times follow the board RTC. Voltage band = min/max half-cycle RMS; dashed lines = sag 207 V / swell 253 V.</p></div>
       <div class="card"><h2>Waveform, one cycle <span class="sub" id="wave-note"></span></h2><canvas id="c-wave" style="height:200px"></canvas>
         <p class="note"><i class="key" style="background:var(--info)"></i>Voltage (left axis) <i class="key" style="background:var(--warn)"></i>Current (right axis), refreshed every 2 s.</p>
         <h2 style="margin-top:14px">Voltage harmonics (% of fundamental)</h2><canvas id="c-hv" style="height:110px"></canvas>
@@ -266,6 +269,9 @@ function renderStatus(d) {
     ["Reset count (loop check)", s.reset_count ?? "—"],
     ["RTC across reset", s.rtc_kept == null ? "—" : s.rtc_kept ? badge("kept", "ok") : badge("reset to default", "warn")],
     ["I2C bus recoveries", s.i2c_recoveries ?? "—"],
+    ...(d.storage ? [["Storage", badge(d.storage.state, d.storage.state === "READY" ? "ok" : "bad") + ` ${d.storage.history_records} min records`],
+      ["Energy saved on flash", (d.storage.energy_saved_mwh / 1e6).toFixed(4) + " kWh"],
+      ["Board config (seq)", `AMC ${d.storage.config.amc < 0 ? "default" : d.storage.config.amc ? "fitted" : "not fitted"} (active: ${d.storage.amc_active ? "fitted" : "not fitted"}), CT phase ${(d.storage.config.ct_phase_cdeg / 100).toFixed(2)}° (${d.storage.config.seq})`]] : []),
     ["Heap free", s.heap_free + " B"], ["Heap minimum ever", s.heap_min + " B"],
     ["Heap total", s.heap_total + " B"], ["Firmware build", esc(d.fw.build)]]);
   $("heap-bar").style.width = (100 - s.heap_free / s.heap_total * 100).toFixed(1) + "%";
@@ -448,6 +454,9 @@ async function mockApi(method, path, b) {
   const pwOk = pw => pw === "demo";
   if (path === "/api/status") return mockStatus();
   if (path === "/api/waveform") return mockWave();
+  if (path.startsWith("/api/events")) return { rtc_s: 900000000, uptime_s: 3600, events: [
+    { seq: 12, rtc_s: 899999000, up_s: 2600, type: 6, a: 1, b: 180, c: 1850 }, { seq: 11, rtc_s: 899998000, up_s: 1600, type: 2, a: 7, b: 1, c: 2 | (0 << 8) | (1 << 16) },
+    { seq: 10, rtc_s: 899997000, up_s: 600, type: 3, a: 2, b: 0, c: 0 }, { seq: 9, rtc_s: 899996400, up_s: 0, type: 1, a: 5, b: 0, c: 0 }] };
   if (path === "/api/login") { if (!pwOk(b.password)) fail(403, "bad password"); return { csrf: "mock-csrf" }; }
   if (path === "/api/logout") return {};
   if (path === "/api/relay") {
@@ -504,8 +513,8 @@ function lineChart(c, o) {
   g.strokeStyle = cv("--line"); g.fillStyle = cv("--muted"); g.lineWidth = 1; g.textAlign = "right"; g.textBaseline = "middle";
   for (let k = 0; k <= 4; k++) { const v = lo + (hi - lo) * k / 4, y = Y(v); g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke(); g.fillText(v.toFixed(o.dig ?? 1), L - 4, y); }
   g.textAlign = "center"; g.textBaseline = "top";
-  const step = o.span > 3 * 3600e3 ? 4 * 3600e3 : o.span > 3600e3 ? 600e3 : 300e3;
-  for (let a = 0; a <= o.span; a += step) g.fillText(a === 0 ? "now" : "-" + (a >= 3600e3 ? (a / 3600e3) + "h" : (a / 60e3) + "m"), X(o.now - a), T + ph + 3);
+  const step = o.span > 8 * 86400e3 ? 5 * 86400e3 : o.span > 2 * 86400e3 ? 86400e3 : o.span > 3 * 3600e3 ? 4 * 3600e3 : o.span > 3600e3 ? 600e3 : 300e3;
+  for (let a = 0; a <= o.span; a += step) g.fillText(a === 0 ? "now" : "-" + (a >= 86400e3 ? (a / 86400e3) + "d" : a >= 3600e3 ? (a / 3600e3) + "h" : (a / 60e3) + "m"), X(o.now - a), T + ph + 3);
   g.save(); g.beginPath(); g.rect(L, T, pw, ph); g.clip();
   (o.hl || []).forEach(l => { if (l.y < lo || l.y > hi) return; g.setLineDash([4, 4]); g.strokeStyle = l.c; g.beginPath(); g.moveTo(L, Y(l.y)); g.lineTo(L + pw, Y(l.y)); g.stroke(); g.setLineDash([]); });
   if (o.band) {   /* filled min/max band, split at gaps */
@@ -558,6 +567,41 @@ function waveChart(c, wv) {
     g.strokeStyle = cv(col); g.lineWidth = 1.8; g.beginPath(); arr.forEach((v, k) => k ? g.lineTo(X(k), Y(v)) : g.moveTo(X(k), Y(v))); g.stroke();
   });
 }
+const EV_NAMES = { 1: "Boot", 2: "Relay command", 3: "24 V lost: relays released", 4: "24 V supply", 5: "Supply mode", 6: "Power quality event",
+  7: "Relay contact", 8: "CT direction", 9: "Config changed", 10: "Storage formatted" };
+const RESET_NAMES = ["unknown", "low power", "WWDG", "IWDG", "software", "power on", "brown-out", "pin / watchdog"];
+const CMD_NAMES = ["SET_ON", "SET_OFF", "POWER_CYCLE", "CANCEL_CYCLE"], SRC_NAMES = ["web", "serial", "local", "system"];
+const MODE_NAMES = ["MAINS", "BACKUP", "LOW_POWER"], PQ_NAMES = ["", "sag", "swell", "interruption"], CT_NAMES = ["unknown", "OK", "no voltage", "stuck on"];
+const chs = m => [0, 1, 2, 3].filter(c => m & (1 << c)).map(c => "CH" + (c + 1)).join("+") || "none";
+function evText(e) {
+  switch (e.type) {
+    case 1: return `reset: ${RESET_NAMES[e.a] || e.a}, reset count ${e.b}`;
+    case 2: return `${CMD_NAMES[e.b] || e.b} ${chs(e.c & 255)} from ${SRC_NAMES[(e.c >> 8) & 255] || "?"} (#${e.a}) ${(e.c >> 16) & 1 ? "applied" : "FAILED"}`;
+    case 3: return `released ${chs(e.a)} (rule c)`;
+    case 4: return e.a ? "present" : "lost";
+    case 5: return `${MODE_NAMES[e.a] || e.a} -> ${MODE_NAMES[e.b] || e.b}`;
+    case 6: return `${PQ_NAMES[e.a] || e.a}, ${(e.b / 1000).toFixed(2)} s, ${(e.c / 10).toFixed(1)} V`;
+    case 7: return `CH${e.a + 1}: ${CT_NAMES[e.b] || e.b}`;
+    case 8: return e.a ? "CT reversed (P < 0)" : "CT direction OK";
+    case 9: return `AMC ${e.a === 255 ? "default" : e.a ? "fitted" : "not fitted"}, CT phase ${(e.b / 100).toFixed(2)}\u00b0`;
+    default: return `a=${e.a} b=${e.b} c=${e.c}`;
+  }
+}
+let evAt = 0;
+async function refreshEvents(d) {
+  if (view !== "status" || Date.now() - evAt < 5000) return;
+  evAt = Date.now();
+  try {
+    const r = await api("GET", "/api/events?n=20"), st = d.storage;
+    $("evinfo").textContent = st ? `storage ${st.state}, ${st.history_records} history records${st.rtc_kept ? "" : ", RTC not kept (times are relative)"}` : "";
+    $("events-log").innerHTML = r.events.map(e => {
+      const ago = e.rtc_s && r.rtc_s >= e.rtc_s ? (r.rtc_s - e.rtc_s) : (e.up_s <= r.uptime_s ? r.uptime_s - e.up_s : null);
+      const when = ago == null ? "earlier boot" : new Date(Date.now() - ago * 1000).toLocaleString();
+      const bad = e.type === 3 || e.type === 6 || (e.type === 7 && e.b >= 2) || (e.type === 8 && e.a) || (e.type === 4 && !e.a);
+      return `<tr><td>${e.seq}</td><td>${esc(when)}</td><td>${badge(EV_NAMES[e.type] || "type " + e.type, bad ? "warn" : "neutral")}</td><td>${esc(evText(e))}</td></tr>`;
+    }).join("") || `<tr><td colspan="4">no events</td></tr>`;
+  } catch (e) { $("events-log").innerHTML = `<tr><td colspan="4">event log not available on this firmware</td></tr>`; }
+}
 function livePoint(d) {
   const a = d.acq, p = a && a.pq; if (!p) return;
   const ref = p.ref_line >= 0 && a.ac[p.ref_line].state === "VALID" ? a.ac[p.ref_line].v_x10 / 10 : null, e = p.events;
@@ -565,6 +609,20 @@ function livePoint(d) {
     p: p.p_dw == null ? null : p.p_dw / 10, f: p.freq_mhz == null ? null : p.freq_mhz / 1000,
     pf: p.pf_x1000 == null ? null : p.pf_x1000 / 1000, ti: p.i_thd_x10 == null ? null : p.i_thd_x10 / 10, tv: p.v_thd_x10 == null ? null : p.v_thd_x10 });
   if (Q.live.length > LIVE_MAX) Q.live.splice(0, Q.live.length - LIVE_MAX);
+}
+function parseHistory2(buf) {
+  const dv = new DataView(buf), M16 = -32768, out = [];
+  if (buf.byteLength < 16 || String.fromCharCode(...new Uint8Array(buf, 0, 4)) !== "PQH2") return out;
+  const es = dv.getUint8(6), now = dv.getUint32(12, true), n = Math.floor((buf.byteLength - 16) / es);
+  for (let k = 0; k < n; k++) {
+    const o = 16 + k * es, rtc = dv.getUint32(o, true), r = j => { const v = dv.getInt16(o + 4 + 2 * j, true); return v === M16 ? null : v; };
+    if (rtc > now + 120) continue;
+    const t = Date.now() - (now - rtc) * 1000;
+    const v = r(0), lo = r(1), hi = r(2), pw = r(4), f = r(5), pf = r(6), tv = r(7), ti = r(8);
+    out.push({ t, v: v == null ? null : v / 10, lo: lo == null ? null : lo / 10, hi: hi == null ? null : hi / 10, p: pw == null ? null : pw / 10,
+      f: f == null ? null : 50 + f / 1000, pf: pf == null ? null : pf / 1000, ti: ti == null ? null : ti / 10, tv });
+  }
+  return out;
 }
 function parseHistory(buf, uptimeMs) {
   const dv = new DataView(buf), M16 = -32768;
@@ -580,15 +638,16 @@ function parseHistory(buf, uptimeMs) {
   return out;
 }
 async function apiBin(path) {
-  if (useMock) return mockHistory();
+  if (useMock) return path.includes("range=") ? mockHistory2(path.split("range=")[1]) : mockHistory();
   const r = await fetch(path, { cache: "no-store" }); if (!r.ok) throw new Error(r.status); return r.arrayBuffer();
 }
 async function refreshQuality(d) {
   if (view !== "quality") return;
   const now = Date.now();
   if (now - Q.waveAt > 2000) { Q.waveAt = now; try { Q.wave = await api("GET", "/api/waveform"); } catch (e) { Q.wave = null; } }
-  if (Q.range === "24h" && now - Q.histAt > 60000) { Q.histAt = now; try { Q.hist = parseHistory(await apiBin("/api/history"), d.fw.uptime_ms); } catch (e) { Q.hist = []; } }
-  const pts = Q.range === "live" ? Q.live : (Q.hist || []), span = Q.range === "live" ? 30 * 60e3 : 24 * 3600e3;
+  if (Q.range !== "live" && now - Q.histAt > 60000) { Q.histAt = now; try { Q.hist = parseHistory2(await apiBin("/api/history?range=" + Q.range)); } catch (e) { Q.hist = []; } }
+  const spans = { live: 30 * 60e3, "24h": 24 * 3600e3, "7d": 7 * 86400e3, "30d": 30 * 86400e3 };
+  const pts = Q.range === "live" ? Q.live : (Q.hist || []), span = spans[Q.range];
   const col = k => pts.map(x => x[k]), t = col("t"), last = pts.length ? pts[pts.length - 1] : {};
   const fmt = (v, dg, u) => v == null ? "—" : v.toFixed(dg) + u;
   $("lv-v").textContent = fmt(last.v, 1, " V"); $("lv-p").textContent = fmt(last.p, 1, " W"); $("lv-f").textContent = fmt(last.f, 3, " Hz");
@@ -611,6 +670,19 @@ document.getElementById("qrange").onclick = e => {
   document.querySelectorAll("#qrange button").forEach(x => x.classList.toggle("on", x === b));
   if (S.data) refreshQuality(S.data);
 };
+function mockHistory2(range) {
+  const bucket = { "24h": 60, "7d": 600, "30d": 1800 }[range] || 60, n = range === "24h" ? 1440 : range === "7d" ? 1008 : 1440;
+  const buf = new ArrayBuffer(16 + n * 22), dv = new DataView(buf), now = 900000000;
+  "PQH2".split("").forEach((ch, k) => dv.setUint8(k, ch.charCodeAt(0))); dv.setUint8(4, 2); dv.setUint8(5, 9); dv.setUint8(6, 22);
+  dv.setUint16(8, bucket, true); dv.setUint32(12, now, true);
+  for (let k = 0; k < n; k++) {
+    const o = 16 + k * 22, ph = k / n * 2 * Math.PI * (range === "24h" ? 1 : 7), v = 2290 + 40 * Math.sin(ph) + (k % 131 === 0 ? -300 : 0);
+    dv.setUint32(o, now - (n - 1 - k) * bucket, true);
+    [v, v - 20 + (k % 131 === 0 ? -400 : 0), v + 25, 560, 650 + 300 * Math.max(0, Math.sin(ph)), 15 * Math.sin(ph * 3), 500, 5, 1600]
+      .forEach((x, j) => dv.setInt16(o + 4 + 2 * j, Math.round(x), true));
+  }
+  return Promise.resolve(buf);
+}
 function mockHistory() {
   const n = 1440, buf = new ArrayBuffer(16 + n * 18), dv = new DataView(buf), up = (Date.now() - M.t0 + 8500) / 1000;
   "PQH1".split("").forEach((ch, k) => dv.setUint8(k, ch.charCodeAt(0))); dv.setUint8(4, 1); dv.setUint8(5, 9); dv.setUint8(6, 18);
@@ -637,7 +709,7 @@ function setConn(t, c) { const e = $("conn"); e.textContent = t; e.className = "
 async function tick() {
   try {
     const d = await Promise.race([api("GET", "/api/status"), new Promise((_, r) => setTimeout(() => r(new Error("timeout")), 2500))]);
-    S.data = d; renderStatus(d); renderRelayCtl(); livePoint(d); refreshQuality(d);
+    S.data = d; renderStatus(d); renderRelayCtl(); livePoint(d); refreshQuality(d); refreshEvents(d);
     if (view === "firmware") { try { renderFw(await api("GET", "/api/fw/status")); } catch (e) { } }
     failures = 0; document.body.classList.remove("stale"); setConn(useMock ? "Mock data · password: demo" : "Live", useMock ? "warn" : "ok");
   } catch (e) { if (++failures >= 2) { document.body.classList.add("stale"); setConn("Disconnected", "bad"); } }

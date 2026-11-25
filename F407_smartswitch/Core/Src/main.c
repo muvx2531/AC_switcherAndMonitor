@@ -34,6 +34,7 @@
 #include "control.h"
 #include "acquisition.h"
 #include "power.h"
+#include "storage.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -902,17 +903,23 @@ void StartDefaultTask(void *argument)
    * even when the read failed, in state UNKNOWN (I3). */
   if (!Control_Start())
     (void) DebugLog_Printf("CTRL: start failed\r\n");
-  /* Acquisition owns ADC1/ADC2, TIM3 and DMA2 Stream0 from here on. Not in safe mode (S6-5). */
-  if (!Boot_SafeMode() && !Acquisition_Start())
-    (void) DebugLog_Printf("ACQ: start failed\r\n");
-  if (!protocolReady)
-    (void) DebugLog_Printf("protocol: USART6 callback registration or RX DMA start failed\r\n");
   if (!Boot_SafeMode()) {
+    /* Storage first: Acquisition reads the board config and the saved energy counter. */
     W25Q128_Result flashInit = W25Q128_Init(&hspi2);
     if (flashInit == W25Q128_OK) FlashDmaTest_Identify();
     else (void) DebugLog_Printf("FLASH DMA init failed %u\r\n", flashInit);
-    (void) EthProbe_Start();
+    if (flashInit == W25Q128_OK) (void) Storage_Init();
+    if (!Storage_Start())
+      (void) DebugLog_Printf("STORAGE: not started\r\n");
+    Storage_LogEvent(ST_EV_BOOT, (int32_t)Boot_ResetCauseIndex(), (int32_t)Boot_ResetCount(), 0, 0);
+    /* Acquisition owns ADC1/ADC2, TIM3 and DMA2 Stream0 from here on. Not in safe mode (S6-5). */
+    if (!Acquisition_Start())
+      (void) DebugLog_Printf("ACQ: start failed\r\n");
   }
+  if (!protocolReady)
+    (void) DebugLog_Printf("protocol: USART6 callback registration or RX DMA start failed\r\n");
+  if (!Boot_SafeMode())
+    (void) EthProbe_Start();
   /* Power owns the ETH/AMC rails from here on (started after EthProbe_Start). */
   if (!Power_Start())
     (void) DebugLog_Printf("PWR: start failed\r\n");
@@ -926,6 +933,11 @@ void StartDefaultTask(void *argument)
     {
       flashTestRequest = 0U;
       FlashDmaTest_Run();
+    }
+    else if (flashTestRequest == 2U)   /* set over SWD: read-only whole-chip scan */
+    {
+      flashTestRequest = 0U;
+      FlashDmaTest_Scan();
     }
     HAL_GPIO_TogglePin(LED_Blue_GPIO_Port, LED_Blue_Pin);
     (void) DebugLog_Printf("SmartSwitch: USART6 DMA and LED heartbeat\r\n");

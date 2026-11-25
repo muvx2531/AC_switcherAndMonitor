@@ -17,7 +17,7 @@ static volatile TickType_t lastBeat[SUP_TASK_COUNT];
 static volatile bool registered[SUP_TASK_COUNT];
 static volatile int lostTask = -1;
 
-static const char *const taskNames[SUP_TASK_COUNT] = { "defaultTask", "control", "acq", "power" };
+static const char *const taskNames[SUP_TASK_COUNT] = { "defaultTask", "control", "acq", "power", "storage" };
 
 /* Static allocation; the stack lives in CCM (never used for DMA). */
 static StaticTask_t tcb;

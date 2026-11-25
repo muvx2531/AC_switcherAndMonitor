@@ -5,6 +5,8 @@
 #include "debug_log.h"
 #include "eth_probe.h"
 #include "supervisor.h"
+#include "storage.h"
+#include "power_quality.h"
 #include "main.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -22,12 +24,8 @@ static TickType_t modeSince;
 
 static void setAmcRail(bool on)
 {
-#if ACQ_AMC_FITTED
-  HAL_GPIO_WritePin(En_3v3_AMC_GPIO_Port, En_3v3_AMC_Pin, on ? GPIO_PIN_SET : GPIO_PIN_RESET);
-#else
-  (void)on;
-  HAL_GPIO_WritePin(En_3v3_AMC_GPIO_Port, En_3v3_AMC_Pin, GPIO_PIN_RESET);   /* nothing to power */
-#endif
+  /* With no AMC3330 fitted there is nothing to power. */
+  HAL_GPIO_WritePin(En_3v3_AMC_GPIO_Port, En_3v3_AMC_Pin, (on && Acquisition_AmcFitted()) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
 static bool amcRailOn(void)
@@ -58,7 +56,9 @@ static void enter(PowerMode *mode, PowerMode next, const char *reason, bool *eth
   } else if (prev == POWER_MAINS) {
     setAmcRail(false);
     if (EthProbe_Suspend()) *ethRail = false;
+    Storage_CheckpointEnergy(Acquisition_EnergyUwh());   /* on battery: save the counter now */
   }
+  Storage_LogEvent(ST_EV_POWER_MODE, (int32_t)prev, (int32_t)next, 0, 0);
   (void)DebugLog_Printf("PWR: %s -> %s (%s)\r\n", Power_ModeName(prev), Power_ModeName(next), reason);
   publish(next, *ethRail, reason, true, false);
 }

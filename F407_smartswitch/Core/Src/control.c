@@ -3,6 +3,7 @@
 #include "pca9536.h"
 #include "debug_log.h"
 #include "supervisor.h"
+#include "storage.h"
 #include "cmsis_os.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -199,6 +200,7 @@ static void releaseAll(void)
     if (wasHigh) {
       releases++;
       (void)DebugLog_Printf("CTRL: 24 V lost, released latches %X (rule c)\r\n", wasHigh);
+      Storage_LogEvent(ST_EV_RULE_C, (int32_t)wasHigh, 0, 0, 0);   /* non-blocking, after the release */
     }
   } else {
     stateKnown = false;
@@ -221,9 +223,11 @@ static void evaluateSupply(bool edge)
       if (!lost) {
         glitches++;
       } else {
+        bool wasPresent = coilSupply;
         if (coilSupply) (void)DebugLog_Printf("CTRL: 24 V coil supply lost\r\n");
         coilSupply = false;
-        releaseAll();
+        releaseAll();                        /* rule (c) first, logging after */
+        if (wasPresent) Storage_LogEvent(ST_EV_SUPPLY, 0, 0, 0, 0);
       }
     }
   } else if (!coilSupply) {
@@ -232,6 +236,7 @@ static void evaluateSupply(bool edge)
       supplyCandidate = false;
       coilSupply = true;
       (void)DebugLog_Printf("CTRL: 24 V coil supply present\r\n");
+      Storage_LogEvent(ST_EV_SUPPLY, 1, 0, 0, 0);
     }
   }
   if (edge) {
@@ -298,6 +303,8 @@ static void process(const QueuedRequest *q)
   outcomeSet(q->id, ok ? OUT_APPLIED : (stateKnown ? OUT_FAILED : OUT_UNKNOWN), ok ? NULL : "I2C");
   (void)DebugLog_Printf("CTRL: request %lu type %u mask %X src %u -> %s\r\n", (unsigned long)q->id,
       (unsigned)r->type, m, (unsigned)r->source, ok ? "APPLIED" : "FAILED");
+  Storage_LogEvent(ST_EV_RELAY, (int32_t)q->id, (int32_t)r->type,
+      (int32_t)((m & 0xFFU) | ((uint32_t)r->source << 8) | ((ok ? 1U : 0U) << 16)), 0);
 }
 
 /* ---- snapshot ------------------------------------------------------------ */

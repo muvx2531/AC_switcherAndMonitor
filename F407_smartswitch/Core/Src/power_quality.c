@@ -1,5 +1,7 @@
 #include "power_quality.h"
 #include "control.h"
+#include "storage.h"
+#include "main.h"
 #include <math.h>
 #include <string.h>
 
@@ -114,14 +116,30 @@ void Pq_Sample(const int32_t d[ACQ_AC_CHANNELS], int32_t ct, uint32_t sampleIdx)
 static void closeEvent(bool openEnded)
 {
   if (evState == PQ_EV_NONE) return;
+  Storage_LogEvent(ST_EV_PQ, (int32_t)evRec.type, (int32_t)evRec.duration_ms, (int32_t)evRec.extreme_dv, 0);
   evRec.active = false;
   evRec.open_ended = openEnded;
+  evState = PQ_EV_NONE;
+}
+
+static AcqPqEventRecord prevRec;   /* restored when an event is cancelled */
+
+/* An event that started just before the AMC rail was switched off is a measurement
+ * artefact (the outputs collapse to 0 V): forget it instead of logging it. */
+static void cancelEvent(void)
+{
+  if (evState == PQ_EV_NONE) return;
+  if (evRec.type == PQ_EV_SAG && sagCount) sagCount--;
+  else if (evRec.type == PQ_EV_SWELL && swellCount) swellCount--;
+  else if (intrCount) intrCount--;
+  evRec = prevRec;
   evState = PQ_EV_NONE;
 }
 
 static void startEvent(AcqPqEvent type, float v, uint32_t nowMs)
 {
   evState = type;
+  prevRec = evRec;
   memset(&evRec, 0, sizeof(evRec));
   evRec.type = type;
   evRec.start_ms = nowMs;
@@ -143,6 +161,16 @@ void Pq_HalfDone(bool contiguous, uint32_t nowMs)
   }
   hsPrevValid = true;
   if (!ok) return;
+
+  /* AMC rail off (battery, or not fitted): nothing can be measured. */
+  bool railOn = Acquisition_AmcFitted() && (En_3v3_AMC_GPIO_Port->ODR & En_3v3_AMC_Pin) != 0U;
+  if (!railOn) {
+    if (evState != PQ_EV_NONE && nowMs - evRec.start_ms < 200U) cancelEvent();
+    else closeEvent(true);
+    eventsActive = false;
+    hsPrevValid = false;
+    return;
+  }
 
   /* Supply voltage = highest line that Control has ON (NC contact closed) and that was
    * measured VALID in the previous window. With no such line the supply is unknown. */
@@ -209,6 +237,9 @@ static void updateContacts(const int32_t lineDv[ACQ_AC_CHANNELS])
     } else {
       contactMismatch[ch] = 0U;
     }
+    if (now != contactState[ch] && (now == PQ_CONTACT_NO_VOLTAGE || now == PQ_CONTACT_STUCK_ON ||
+        contactState[ch] == PQ_CONTACT_NO_VOLTAGE || contactState[ch] == PQ_CONTACT_STUCK_ON))
+      Storage_LogEvent(ST_EV_CONTACT, (int32_t)ch, (int32_t)now, 0, 0);
     contactState[ch] = now;
   }
 }
@@ -258,7 +289,7 @@ void Pq_EndWindow(uint32_t n, float fs, float vRefRms, float iRms, bool ctValid,
   if (out->p_valid) {
     float f = freqValid ? lastFreq : fs / (float)N_CYCLE;
     float tau = (float)(4 - ws.ref_line) * RANK_CYCLES / ADC_CLK_HZ;
-    float theta1 = 2.0f * 3.14159265f * f * tau + ACQ_CT_PHASE_DEG * 3.14159265f / 180.0f;
+    float theta1 = 2.0f * 3.14159265f * f * tau + Acquisition_CtPhaseDeg() * 3.14159265f / 180.0f;
     float p = 0.0f, q1 = 0.0f, ang1 = 0.0f;
     for (unsigned int k = 1; k <= H; k++) {
       /* X = scale * (Re - j Im) */
@@ -287,7 +318,9 @@ void Pq_EndWindow(uint32_t n, float fs, float vRefRms, float iRms, bool ctValid,
     if (pw < -5.0f) { if (negativeWindows < 255U) negativeWindows++; }
     else if (pw > -1.0f) negativeWindows = 0U;
   }
-  out->ct_reversed = negativeWindows >= 3U;
+  bool rev = negativeWindows >= 3U;
+  if (rev != out->ct_reversed) Storage_LogEvent(ST_EV_CT_REVERSED, rev ? 1 : 0, 0, 0, 0);
+  out->ct_reversed = rev;
   out->energy_uwh = energyUwh;
 
   /* events summary */
@@ -300,6 +333,9 @@ void Pq_EndWindow(uint32_t n, float fs, float vRefRms, float iRms, bool ctValid,
   updateContacts(lineDv);
   memcpy(out->contact, contactState, sizeof(contactState));
 }
+
+void Pq_SetEnergy(uint64_t uwh) { energyUwh = uwh; }
+uint64_t Pq_Energy(void) { return energyUwh; }
 
 uint32_t Pq_NextArr(uint32_t nominalArr, uint32_t timerHz)
 {

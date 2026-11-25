@@ -11,6 +11,8 @@ void Boot_CaptureResetCause(void);
 /* "POWER_ON", "PIN", "SOFTWARE", "IWDG", "WWDG", "LOW_POWER", "BROWN_OUT" or "UNKNOWN".
  * An external STWD100 watchdog reset appears as "PIN" (it drives NRST). */
 const char *Boot_ResetCause(void);
+/* 1 LOW_POWER, 2 WWDG, 3 IWDG, 4 SOFTWARE, 5 POWER_ON, 6 BROWN_OUT, 7 PIN, 0 UNKNOWN (event log). */
+int Boot_ResetCauseIndex(void);
 
 /* Toggle Clr_wdt (PE7) for the external STWD100 watchdog (timeout 1.12 s).
  * Boot_WdtEarlyKick configures PE7 itself so it can run before MX_GPIO_Init. */
@@ -34,6 +36,8 @@ bool Boot_RtcKept(void);
 #define BOOT_SAFE_MODE_RESETS 5U
 #define BOOT_SAFE_MODE_WINDOW_S 600U
 void Boot_EvaluateSafeMode(void);
+/* RTC calendar as seconds since 2000-01-01 (meaningful across resets only if Boot_RtcKept). */
+uint32_t Boot_RtcSeconds(void);
 bool Boot_SafeMode(void);
 uint32_t Boot_ResetCount(void);
 /* Clear the reset counter (stable uptime reached, or serial CLRSAFE). Takes effect
