@@ -6,6 +6,7 @@
 #include "core/net.h"
 #include "ipv4/ipv4.h"
 #include "dhcp/dhcp_client.h"
+#include "ipv4/arp.h"
 #include "drivers/mac/stm32f4xx_eth_driver.h"
 #include "drivers/phy/lan8742_driver.h"
 #include <stdio.h>
@@ -27,6 +28,9 @@ static volatile bool dhcpTimedOut, dhcpRunning, usingFallback;
 static uint16_t phyId1, phyId2;
 static uint8_t macBytes[6];
 static Ipv4Addr lastLoggedIp;
+static uint8_t announceLeft;        /* gratuitous ARPs still to send */
+static uint32_t lastAnnounceMs;
+static bool lastLink;
 
 /* CycloneTCP's weak default only sets pins for known evaluation boards. */
 void stm32f4xxEthInitGpio(NetInterface *interface)
@@ -167,6 +171,21 @@ void EthProbe_Report(void)
     lastLoggedIp = ip;
     (void)DebugLog_Printf("ETH: address %s (%s)\r\n", ipv4AddrToString(ip, text),
         usingFallback ? "static fallback" : "DHCP");
+    announceLeft = 3U;
+  }
+  /* Gratuitous ARP (3 x, 1 s apart) when the address is set or the link comes up.
+   * A PC that tried to reach us before we had an address marks us unreachable and
+   * waits ~60 s before asking again (Windows); the announcement updates its cache. */
+  bool link = powered && iface->linkState;
+  if (link && !lastLink) announceLeft = 3U;
+  lastLink = link;
+  uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+  if (announceLeft && link && ip != IPV4_UNSPECIFIED_ADDR && nowMs - lastAnnounceMs >= 1000U) {
+    osAcquireMutex(&netMutex);
+    (void)arpSendRequest(iface, ip, &MAC_BROADCAST_ADDR);
+    osReleaseMutex(&netMutex);
+    lastAnnounceMs = nowMs;
+    announceLeft--;
   }
 }
 
