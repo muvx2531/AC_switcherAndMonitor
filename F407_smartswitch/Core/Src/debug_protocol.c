@@ -5,6 +5,7 @@
 #include "control.h"
 #include "boot.h"
 #include "storage.h"
+#include "supervisor.h"
 #include <stdlib.h>
 #include "main.h"
 #include "FreeRTOS.h"
@@ -123,6 +124,10 @@ static void handleLine(char *line)
   if (strcmp(line + 4, "CLRSAFE") == 0) {   /* clear the boot-loop counter (S6-5) */
     Boot_ClearResetCount();
     (void)snprintf(body, sizeof(body), "%s,CLRSAFE,OK", seq); response(body); return;
+  }
+  if (strcmp(line + 4, "WDTTEST") == 0) {   /* stop the default task heartbeat: watchdog reset test */
+    Supervisor_WdtTest();
+    (void)snprintf(body, sizeof(body), "%s,WDTTEST,STARTED", seq); response(body); return;
   }
   if (strcmp(line + 4, "BACKUP") == 0) {
     uint16_t raw;

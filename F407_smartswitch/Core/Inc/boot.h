@@ -18,6 +18,10 @@ int Boot_ResetCauseIndex(void);
  * Boot_WdtEarlyKick configures PE7 itself so it can run before MX_GPIO_Init. */
 void Boot_WdtEarlyKick(void);
 void Boot_WdtKick(void);
+/* Longest gap between kicks since boot (or the last reset of the maximum), in ms. */
+uint32_t Boot_WdtMaxGapMs(void);
+uint32_t Boot_WdtGapNowMs(void);
+void Boot_WdtResetMaxGap(void);
 
 /* Put unused interfaces into a no-backfeed state (decisions S2-5, S3-4):
  * USART1 (EC25) and USART2 (RS485) are de-initialized so PA9/PD5 stop driving

@@ -62,6 +62,8 @@ bootloader must never address the PCA9536, the RTC or the RCC reset flags; it wr
 (0x3C) only during flash work (`docs/local-ui-status.md`). The LED and OLED belong to
 `local_ui.c`; share `ssw_oled.*` identically between both projects. Release images:
 `python tools/make_ssw.py`. Keep `ssw_image.h` / `ssw_sha256.*` identical in both projects.
-Fit the DIS_WDT jumper before flashing images larger than 128 KB (sector erase > WDT timeout).
+Fit the DIS_WDT jumper before flashing with ST-LINK (sector erase > WDT timeout); boards run
+without it since 2026-11-25 (`docs/phase1-foundation.md`). Never add an unbounded wait: the
+Supervisor kicks every 200 ms and the STWD100 resets after 1.12 s.
 
 For the temporary USART6 command interface, read docs/serial-protocol.md. SET can actuate relays; checksum is not authentication.

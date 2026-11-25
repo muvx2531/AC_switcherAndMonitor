@@ -182,8 +182,9 @@ static void buildStatus(void)
   (void)DebugLog_GetStats(&ls);
   put("\"sys\":{\"heap_free\":%u,\"heap_min\":%u,\"heap_total\":%u,", (unsigned)xPortGetFreeHeapSize(),
       (unsigned)xPortGetMinimumEverFreeHeapSize(), (unsigned)configTOTAL_HEAP_SIZE);
-  put("\"reset_cause\":\"%s\",\"reset_count\":%lu,\"safe_mode\":%s,\"watchdog\":{\"phase\":\"%s\",\"lost\":%s%s%s,\"hb_ms\":{",
-      Boot_ResetCause(), (unsigned long)Boot_ResetCount(), Boot_SafeMode() ? "true" : "false", Supervisor_Phase(),
+  put("\"reset_cause\":\"%s\",\"reset_count\":%lu,\"safe_mode\":%s,\"watchdog\":{\"boot_gap_ms\":%lu,\"max_gap_ms\":%lu,\"phase\":\"%s\",\"lost\":%s%s%s,\"hb_ms\":{",
+      Boot_ResetCause(), (unsigned long)Boot_ResetCount(), Boot_SafeMode() ? "true" : "false",
+      (unsigned long)Supervisor_BootGapMs(), (unsigned long)Boot_WdtMaxGapMs(), Supervisor_Phase(),
       Supervisor_LostTask() ? "\"" : "", Supervisor_LostTask() ? Supervisor_LostTask() : "null",
       Supervisor_LostTask() ? "\"" : "");
   for (int t = 0; t < (int)SUP_TASK_COUNT; t++) {

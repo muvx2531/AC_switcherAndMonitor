@@ -16,6 +16,8 @@ static volatile Phase phase = PHASE_BOOT;
 static volatile TickType_t lastBeat[SUP_TASK_COUNT];
 static volatile bool registered[SUP_TASK_COUNT];
 static volatile int lostTask = -1;
+static volatile bool wdtTest;          /* serial WDTTEST: default task stops its heartbeat */
+static uint32_t bootGapMs;             /* longest kick gap during the boot phase */
 
 static const char *const taskNames[SUP_TASK_COUNT] = { "defaultTask", "control", "acq", "power", "storage" };
 
@@ -35,6 +37,12 @@ static void supervisorTask(void *argument)
       if (now - start < pdMS_TO_TICKS(BOOT_DEADLINE_MS)) kick = true;
       else phase = PHASE_BOOT_TIMEOUT;
     } else if (phase == PHASE_RUN) {
+      if (bootGapMs == 0U) {           /* first pass in run phase: report the boot phase */
+        bootGapMs = Boot_WdtMaxGapMs() + 1U;
+        (void)DebugLog_Printf("SUP: boot phase done in %lu ms, longest watchdog gap %lu ms (limit 1120)\r\n",
+            (unsigned long)((now - start) * portTICK_PERIOD_MS), (unsigned long)Boot_WdtMaxGapMs());
+        Boot_WdtResetMaxGap();
+      }
       kick = true;
       for (int t = 0; t < (int)SUP_TASK_COUNT; t++) {
         if (registered[t] && now - lastBeat[t] >= pdMS_TO_TICKS(HEARTBEAT_TIMEOUT_MS)) {
@@ -70,6 +78,10 @@ bool Supervisor_Start(void)
   };
   return osThreadNew(supervisorTask, NULL, &attr) != NULL;
 }
+
+void Supervisor_WdtTest(void) { wdtTest = true; }
+bool Supervisor_WdtTestActive(void) { return wdtTest; }
+uint32_t Supervisor_BootGapMs(void) { return bootGapMs ? bootGapMs - 1U : 0U; }
 
 void Supervisor_BootComplete(void)
 {

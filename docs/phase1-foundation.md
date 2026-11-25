@@ -26,12 +26,32 @@ bootloader itself. Decision S7-3 (bootloader in v1) is unchanged.
    Minimum stack free (words): IDLE 105, Tmr Svc 214, debugTx 217, supervisor 226.
    Heap minimum 22,320 B.
 
-## Not yet tested (needs someone at the board)
+## Running without the DIS_WDT jumper (2026-11-25, firmware 0.7.1, board 2)
 
-- **Watchdog with the DIS_WDT jumper removed:** board must boot and keep running (no resets
-  in the log, `reset_cause` stays `PIN`/`POWER_ON`). Then confirm that a stuck default task
-  causes a reset (e.g. hold the board in the debugger: the STWD100 should reset it within
-  ~1.1 s of the supervisor stopping).
+Before removing the jumper the remaining unbounded waits were fixed: the CycloneTCP
+STM32F4 MAC driver waited forever for the DMA software reset (needs the PHY's 50 MHz RMII
+clock; a dead or unpowered PHY would starve the Supervisor and cause a reset loop) and for
+MDIO busy. These waits are now bounded (100 ms, returns `ERROR_TIMEOUT`, the interface start
+fails and is retried; MDIO ~ms). The change is marked `SmartSwitch:` in
+`Middlewares/.../drivers/mac/stm32f4xx_eth_driver.c` (GPLv2: publish with the source).
+
+`Boot_WdtKick` measures the longest gap between kicks (DWT cycle counter). The log prints
+`SUP: boot phase done in .. ms, longest watchdog gap .. ms (limit 1120)` and `/api/status`
+shows `sys.watchdog.boot_gap_ms` and `max_gap_ms` (run phase). Serial `WDTTEST` stops the
+default task heartbeat to prove the reset path.
+
+| Test (jumper removed) | Result |
+|---|---|
+| Boot gap / run gap | 200-201 ms / 200 ms (limit 1120 ms); boot phase 1.0 s |
+| Power on without jumper | boots, `POWER_ON`, keeps running |
+| Serial `WDTTEST` | Supervisor stops kicking 2 s later (`heartbeat_lost: defaultTask`), bootloader restarts 1.6 s after that, `reset_cause PIN`, PCA9536 latch unchanged |
+| FOTA install 0.7.0 -> 0.7.1 (sector erase in the bootloader) | no watchdog reset; installed, trial, committed after 60 s |
+| Upload 240 KB over the web | run gap still 200 ms |
+
+The ST-LINK still needs the jumper (erasing a 128 KB sector takes longer than 1.12 s and
+the debugger halts the CPU). Fit it before flashing, remove it afterwards.
+
+## Not yet tested (needs someone at the board)
 - **I2C recovery under a real fault:** briefly short SDA (PB7) to GND while the status page
   polls; expect `relay.ok=false`, then recovery and `i2c_recoveries` increasing, with the
   PCA9536 latch unchanged.

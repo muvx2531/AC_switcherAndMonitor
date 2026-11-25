@@ -52,10 +52,28 @@ void Boot_WdtEarlyKick(void)
   Boot_WdtKick();
 }
 
+/* Longest interval between two kicks (DWT cycle counter, 168 MHz after SystemClock_Config).
+ * The STWD100 resets the MCU after 1.12 s (minimum) without a WDI edge (open item H7). */
+static uint32_t lastKickCyc, maxGapCyc;
+static bool gapOn;
+
 void Boot_WdtKick(void)
 {
+  uint32_t now = DWT->CYCCNT;
+  if (gapOn) { uint32_t g = now - lastKickCyc; if (g > maxGapCyc) maxGapCyc = g; }
+  else {
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    now = DWT->CYCCNT;
+    gapOn = true;
+  }
+  lastKickCyc = now;
   HAL_GPIO_TogglePin(Clr_wdt_GPIO_Port, Clr_wdt_Pin);
 }
+
+uint32_t Boot_WdtMaxGapMs(void) { return maxGapCyc / (SystemCoreClock / 1000U); }
+uint32_t Boot_WdtGapNowMs(void) { return (DWT->CYCCNT - lastKickCyc) / (SystemCoreClock / 1000U); }
+void Boot_WdtResetMaxGap(void) { maxGapCyc = 0; }
 
 void Boot_SafeUnusedInterfaces(void)
 {
