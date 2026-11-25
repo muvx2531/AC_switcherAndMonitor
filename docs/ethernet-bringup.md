@@ -49,3 +49,12 @@ words. These are observed remaining margins, not guarantees for later loads.
 The 301-packet ping run used the earlier ping-only build, before enabling the
 TCP test service. Long-duration TCP, simultaneous clients, HTTP, power cycling,
 and repeated link loss with active TCP connections remain untested.
+
+## Gratuitous ARP (2026-11-25)
+
+`EthProbe_Report` sends three gratuitous ARP requests (sender = target = own IP, broadcast,
+1 s apart) whenever the IPv4 address changes (DHCP lease or static fallback) and when the link
+comes up. Without it a Windows PC that tried to reach the board during the first 12.8 s (no
+address yet) kept the neighbour entry unreachable and only retried after ~60 s, so the web page
+appeared ~65 s after a reset. Measured after the change: first ping 12.8-13.1 s, HTTP 12.9-13.2 s
+with the PC pinging from the moment of reset (board 2, direct cable).

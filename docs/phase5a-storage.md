@@ -90,7 +90,9 @@ UNFORMATTED path with foreign data, 30-day history read time (needs a checkpoint
 removal), power cut during a config / log write (Phase 5 gate), ring wrap-around, UNFORMATTED
 path with foreign data, 30-day history read time.
 
-Observed during testing (not caused by storage): after a board reset the PC on the direct
-cable answers ping only ~65 s later although the board logs its static address at 12.8 s;
-with the PHY link up on both sides from ~5 s. Still under investigation. Frequent test resets
-also reached the safe-mode threshold once (no Ethernet in safe mode); clear with `CLRSAFE`.
+Observed during testing (not caused by storage): after a board reset the PC answered ping only
+~65 s later. Cause: Windows marks the neighbour unreachable when ARP fails while the board has
+no address yet (first 12.8 s) and waits ~60 s before asking again. Fixed in `eth_probe.c`: the
+board sends 3 gratuitous ARPs (1 s apart) when its address is set or the link comes up; the web
+now answers ~13 s after reset even when the PC was polling from boot. Frequent test resets also
+reached the safe-mode threshold once (no Ethernet in safe mode); clear with `CLRSAFE`.
