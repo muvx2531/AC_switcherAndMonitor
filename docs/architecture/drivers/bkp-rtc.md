@@ -17,8 +17,8 @@
 | BKP2R | Control | duration_s ของ CH1 (16 bit ล่าง) และ CH2 (16 bit บน) |
 | BKP3R | Control | duration_s ของ CH3 และ CH4 |
 | BKP4R | Control | ค่าตรวจสอบของ BKP1R–BKP3R |
-| BKP5R | Supervisor | จำนวน reset ในหน้าต่างปัจจุบัน |
-| BKP6R | Supervisor | เวลาเริ่มหน้าต่าง (RTC) |
+| BKP5R | Supervisor | `0x5243` ใน 16 bit บน + จำนวน reset ในหน้าต่างปัจจุบัน (เขียนโดย `Boot_EvaluateSafeMode` ตอน boot, ล้างโดย Supervisor/`CLRSAFE`) |
+| BKP6R | Supervisor | เวลาเริ่มหน้าต่าง (วินาทีตั้งแต่ 2000-01-01 จาก RTC) |
 | BKP7R | Supervisor | สาเหตุ reset ล่าสุด |
 | BKP8R | Supervisor | PC ตอน HardFault ล่าสุด |
 | BKP9R–BKP19R | สำรอง | — |

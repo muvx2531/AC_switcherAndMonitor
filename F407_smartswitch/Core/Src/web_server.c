@@ -8,6 +8,7 @@
 #include "eth_probe.h"
 #include "pca9536.h"
 #include "acquisition.h"
+#include "power.h"
 #include "w25q128.h"
 #include "boot.h"
 #include "supervisor.h"
@@ -59,8 +60,8 @@ static void buildStatus(void)
 
   EthInfo n;
   EthProbe_GetInfo(&n);
-  put("\"net\":{\"link\":%s,\"mode\":\"%s\",\"ip\":\"%s\",\"mask\":\"%s\",\"gw\":\"%s\",\"mac\":\"%s\",\"phy_id\":\"%04X:%04X\"},",
-      n.link ? "true" : "false", n.dhcp ? "dhcp" : (n.addressValid ? "static" : "none"),
+  put("\"net\":{\"powered\":%s,\"link\":%s,\"mode\":\"%s\",\"ip\":\"%s\",\"mask\":\"%s\",\"gw\":\"%s\",\"mac\":\"%s\",\"phy_id\":\"%04X:%04X\"},",
+      n.powered ? "true" : "false", n.link ? "true" : "false", n.dhcp ? "dhcp" : (n.addressValid ? "static" : "none"),
       n.ip, n.mask, n.gw, n.mac, n.phyId1, n.phyId2);
 
   /* Read-only: no relay state is changed by the web in this phase. */
@@ -81,9 +82,16 @@ static void buildStatus(void)
       eff[c.effective[0]], eff[c.effective[1]], eff[c.effective[2]], eff[c.effective[3]],
       (unsigned long)c.glitch_count, (unsigned long)c.supply_releases, c.boot_note ? c.boot_note : "");
 
-  put("\"power\":{\"vin_detect\":%u,\"efuse_ilim\":%u,\"chrg\":%u,\"fault\":%u},",
+  PowerSnapshot ps;
+  Power_GetSnapshot(&ps);
+  put("\"power\":{\"vin_detect\":%u,\"efuse_ilim\":%u,\"chrg\":%u,\"fault\":%u,"
+      "\"mode\":\"%s\",\"mode_age_s\":%lu,\"eth_rail\":%s,\"amc_rail\":%s,\"transitions\":%lu,"
+      "\"eth_resume_fail\":%lu,\"reason\":\"%s\"},",
       pin(Vin_Detect_GPIO_Port, Vin_Detect_Pin), pin(eFuse_iLim_GPIO_Port, eFuse_iLim_Pin),
-      pin(Batt_status_GPIO_Port, Batt_status_Pin), pin(Batt_FAULT_GPIO_Port, Batt_FAULT_Pin));
+      pin(Batt_status_GPIO_Port, Batt_status_Pin), pin(Batt_FAULT_GPIO_Port, Batt_FAULT_Pin),
+      Power_ModeName(ps.mode), (unsigned long)(ps.mode_age_ms / 1000U), ps.eth_rail ? "true" : "false",
+      ps.amc_rail ? "true" : "false", (unsigned long)ps.transitions, (unsigned long)ps.eth_resume_failures,
+      ps.last_reason ? ps.last_reason : "");
 
   /* Acquisition snapshot: a value is printed only when its validity is VALID, else null. */
   AcqSnapshot a;
@@ -127,8 +135,16 @@ static void buildStatus(void)
   (void)DebugLog_GetStats(&ls);
   put("\"sys\":{\"heap_free\":%u,\"heap_min\":%u,\"heap_total\":%u,", (unsigned)xPortGetFreeHeapSize(),
       (unsigned)xPortGetMinimumEverFreeHeapSize(), (unsigned)configTOTAL_HEAP_SIZE);
-  put("\"reset_cause\":\"%s\",\"watchdog\":{\"phase\":\"%s\"},\"rtc_kept\":%s,\"i2c_recoveries\":%lu,",
-      Boot_ResetCause(), Supervisor_Phase(), Boot_RtcKept() ? "true" : "false",
+  put("\"reset_cause\":\"%s\",\"reset_count\":%lu,\"safe_mode\":%s,\"watchdog\":{\"phase\":\"%s\",\"lost\":%s%s%s,\"hb_ms\":{",
+      Boot_ResetCause(), (unsigned long)Boot_ResetCount(), Boot_SafeMode() ? "true" : "false", Supervisor_Phase(),
+      Supervisor_LostTask() ? "\"" : "", Supervisor_LostTask() ? Supervisor_LostTask() : "null",
+      Supervisor_LostTask() ? "\"" : "");
+  for (int t = 0; t < (int)SUP_TASK_COUNT; t++) {
+    uint32_t age = Supervisor_HeartbeatAgeMs((SupTask)t);
+    if (age == UINT32_MAX) put("%s\"%s\":null", t ? "," : "", Supervisor_TaskName((SupTask)t));
+    else put("%s\"%s\":%lu", t ? "," : "", Supervisor_TaskName((SupTask)t), (unsigned long)age);
+  }
+  put("}},\"rtc_kept\":%s,\"i2c_recoveries\":%lu,", Boot_RtcKept() ? "true" : "false",
       (unsigned long)I2cBus_RecoveryCount());
   put("\"log\":{\"queued\":%lu,\"high\":%lu,\"dropped\":%lu,\"dma_start_err\":%lu,\"dma_xfer_err\":%lu},",
       (unsigned long)ls.queued_bytes, (unsigned long)ls.high_water_bytes, (unsigned long)ls.dropped_messages,

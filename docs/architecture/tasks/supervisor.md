@@ -1,5 +1,7 @@
 # Supervisor task
 
+**สถานะ implement:** `docs/phase4-power.md` (heartbeat registry, safe mode, ล้างตัวนับหลัง 10 นาที; ยังไม่มี HardFault capture)
+
 ## หน้าที่
 ตัดสินว่าระบบยังทำงานดีพอที่จะ toggle watchdog หรือไม่ เก็บเหตุผลของการ reset
 ตรวจ boot loop และดูแล time module (RTC)

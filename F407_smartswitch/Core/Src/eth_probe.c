@@ -20,6 +20,7 @@ extern ETH_DMADescTypeDef DMATxDscrTab[ETH_TX_DESC_CNT];
 #define FALLBACK_MASK "255.255.255.0"
 
 static bool available;
+static volatile bool powered;
 static NetInterface *iface;
 static DhcpClientContext dhcpContext;
 static volatile bool dhcpTimedOut, dhcpRunning, usingFallback;
@@ -148,6 +149,7 @@ bool EthProbe_Start(void)
         (unsigned)(DHCP_TIMEOUT_MS / 1000U));
   }
   available = true;
+  powered = true;
   if (!WebServer_Start(iface))
     (void)DebugLog_Printf("WEB: HTTP server start failed\r\n");
   return true;
@@ -168,6 +170,83 @@ void EthProbe_Report(void)
   }
 }
 
+/* Direct MDIO read with a bound (the CycloneTCP PHY driver busy-waits forever on a
+ * PHY that does not answer). MAC clock and MDC/MDIO pins must be enabled. */
+static bool mdioRead(uint32_t reg, uint16_t *value)
+{
+  uint32_t cr = ETH->MACMIIAR & ETH_MACMIIAR_CR;
+  if (cr == 0U) cr = ETH_MACMIIAR_CR_Div102;   /* HCLK 150-168 MHz */
+  ETH->MACMIIAR = (0U << 11) | ((reg & 0x1FU) << 6) | cr | ETH_MACMIIAR_MB;
+  for (unsigned int i = 0; i < 100000U; i++) {
+    if ((ETH->MACMIIAR & ETH_MACMIIAR_MB) == 0U) { *value = (uint16_t)ETH->MACMIIDR; return true; }
+  }
+  return false;
+}
+
+static void releasePins(void)
+{
+  /* RMII + MDC/MDIO back to reset state (analog) so nothing drives the unpowered PHY. */
+  HAL_GPIO_DeInit(GPIOC, GPIO_PIN_1 | GPIO_PIN_4 | GPIO_PIN_5);
+  HAL_GPIO_DeInit(GPIOA, GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_7);
+  HAL_GPIO_DeInit(GPIOB, GPIO_PIN_11 | GPIO_PIN_12 | GPIO_PIN_13);
+}
+
+bool EthProbe_Suspend(void)
+{
+  if (!available || !powered) return false;
+  if (dhcpRunning) { (void)dhcpClientStop(&dhcpContext); dhcpRunning = false; }
+  (void)netStopInterface(iface);                 /* link down, IRQ off, no more nicTick */
+  osAcquireMutex(&netMutex);
+  ETH->DMAOMR &= ~(ETH_DMAOMR_ST | ETH_DMAOMR_SR);
+  ETH->MACCR &= ~(ETH_MACCR_TE | ETH_MACCR_RE);
+  releasePins();
+  __HAL_RCC_ETHMAC_CLK_DISABLE();
+  __HAL_RCC_ETHMACTX_CLK_DISABLE();
+  __HAL_RCC_ETHMACRX_CLK_DISABLE();
+  powered = false;
+  osReleaseMutex(&netMutex);
+  HAL_GPIO_WritePin(En_3v3_ETH_GPIO_Port, En_3v3_ETH_Pin, GPIO_PIN_RESET);
+  (void)DebugLog_Printf("ETH: suspended, +3.3V_ETH off\r\n");
+  return true;
+}
+
+bool EthProbe_Resume(void)
+{
+  if (!available || powered) return false;
+  HAL_GPIO_WritePin(En_3v3_ETH_GPIO_Port, En_3v3_ETH_Pin, GPIO_PIN_SET);
+  osDelay(100);                                   /* LAN8742 power-on reset */
+  HAL_ETH_MspInit(&heth);                         /* pins back to AF11 */
+  __HAL_RCC_ETHMAC_CLK_ENABLE();
+  uint16_t id1 = 0, id2 = 0;
+  bool phyOk = false;
+  for (unsigned int tries = 0; tries < 10U && !phyOk; tries++) {
+    phyOk = mdioRead(2U, &id1) && mdioRead(3U, &id2) && id1 == 0x0007U && (id2 & 0xFFF0U) == 0xC130U;
+    if (!phyOk) osDelay(50);
+  }
+  if (!phyOk) {
+    (void)DebugLog_Printf("ETH: resume failed, PHY not answering (%04X:%04X)\r\n", id1, id2);
+    releasePins();
+    __HAL_RCC_ETHMAC_CLK_DISABLE();
+    HAL_GPIO_WritePin(En_3v3_ETH_GPIO_Port, En_3v3_ETH_Pin, GPIO_PIN_RESET);
+    return false;
+  }
+  osAcquireMutex(&netMutex);
+  error_t error = iface->nicDriver->init(iface);  /* MAC reset, descriptors, PHY init */
+  osReleaseMutex(&netMutex);
+  if (!error) error = netStartInterface(iface);
+  if (error) {
+    (void)DebugLog_Printf("ETH: resume failed, driver init %ld\r\n", (long)error);
+    return false;
+  }
+  powered = true;
+  if (!usingFallback) {
+    dhcpTimedOut = false;
+    if (dhcpClientStart(&dhcpContext) == NO_ERROR) dhcpRunning = true;
+  }
+  (void)DebugLog_Printf("ETH: resumed (%s)\r\n", usingFallback ? "static fallback kept" : "DHCP restarted");
+  return true;
+}
+
 void EthProbe_GetInfo(EthInfo *info)
 {
   memset(info, 0, sizeof(*info));
@@ -179,7 +258,8 @@ void EthProbe_GetInfo(EthInfo *info)
   (void)ipv4GetSubnetMask(iface, &mask);
   (void)ipv4GetDefaultGateway(iface, &gw);
   info->available = true;
-  info->link = iface->linkState;
+  info->powered = powered;
+  info->link = powered && iface->linkState;
   info->dhcp = !usingFallback && dhcpRunning && dhcpClientGetState(&dhcpContext) == DHCP_STATE_BOUND;
   info->addressValid = ip != IPV4_UNSPECIFIED_ADDR;
   if (info->addressValid) {

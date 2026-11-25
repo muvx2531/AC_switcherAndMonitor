@@ -1,5 +1,5 @@
 param(
-  [ValidateSet('GET','SET','BACKUP','BATV')][string]$Command = 'GET',
+  [ValidateSet('GET','SET','BACKUP','BATV','CLRSAFE')][string]$Command = 'GET',
   [ValidateRange(0,15)][int]$Value = 0,
   [string]$Port = 'COM3',
   [ValidateRange(0,255)][int]$Sequence = 1,
@@ -7,7 +7,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $seq = '{0:X2}' -f $Sequence
-$body = if ($Command -eq 'GET') { "$seq,GET" } elseif ($Command -eq 'BACKUP') { "$seq,BACKUP" } elseif ($Command -eq 'BATV') { "$seq,BATV" } else { "$seq,SET,{0:X}" -f $Value }
+$body = if ($Command -eq 'GET') { "$seq,GET" } elseif ($Command -eq 'BACKUP') { "$seq,BACKUP" } elseif ($Command -eq 'BATV') { "$seq,BATV" } elseif ($Command -eq 'CLRSAFE') { "$seq,CLRSAFE" } else { "$seq,SET,{0:X}" -f $Value }
 function Checksum([string]$value) {
   $sum = 0
   foreach ($byte in [Text.Encoding]::ASCII.GetBytes($value)) { $sum = ($sum + $byte) -band 255 }

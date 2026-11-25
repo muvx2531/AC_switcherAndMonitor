@@ -33,6 +33,7 @@
 #include "supervisor.h"
 #include "control.h"
 #include "acquisition.h"
+#include "power.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -881,8 +882,10 @@ void StartDefaultTask(void *argument)
    * while TX is idle: start both before the first log message is queued. */
   (void) DebugLog_Init(&huart6);
   bool protocolReady = DebugProtocol_Start(&huart6);
-  (void) DebugLog_Printf("BOOT: reset cause %s, RTC %s\r\n", Boot_ResetCause(),
-      Boot_RtcKept() ? "kept" : "set to default");
+  Boot_EvaluateSafeMode();
+  (void) DebugLog_Printf("BOOT: reset cause %s, RTC %s, reset count %lu%s\r\n", Boot_ResetCause(),
+      Boot_RtcKept() ? "kept" : "set to default", (unsigned long)Boot_ResetCount(),
+      Boot_SafeMode() ? " -> SAFE MODE (Control, Power, Supervisor only; serial CLRSAFE clears)" : "");
   PCA9536_Registers pcaBefore, pcaAfter;
   I2cBusResult i2cResult = I2cBus_Init(&hi2c1);
   /* S6-1: first I2C activity is a bus recovery (the PCA9536 may hold SDA after a
@@ -899,15 +902,20 @@ void StartDefaultTask(void *argument)
    * even when the read failed, in state UNKNOWN (I3). */
   if (!Control_Start())
     (void) DebugLog_Printf("CTRL: start failed\r\n");
-  /* Acquisition owns ADC1/ADC2, TIM3 and DMA2 Stream0 from here on. */
-  if (!Acquisition_Start())
+  /* Acquisition owns ADC1/ADC2, TIM3 and DMA2 Stream0 from here on. Not in safe mode (S6-5). */
+  if (!Boot_SafeMode() && !Acquisition_Start())
     (void) DebugLog_Printf("ACQ: start failed\r\n");
   if (!protocolReady)
     (void) DebugLog_Printf("protocol: USART6 callback registration or RX DMA start failed\r\n");
-  W25Q128_Result flashInit = W25Q128_Init(&hspi2);
-  if (flashInit == W25Q128_OK) FlashDmaTest_Identify();
-  else (void) DebugLog_Printf("FLASH DMA init failed %u\r\n", flashInit);
-  (void) EthProbe_Start();
+  if (!Boot_SafeMode()) {
+    W25Q128_Result flashInit = W25Q128_Init(&hspi2);
+    if (flashInit == W25Q128_OK) FlashDmaTest_Identify();
+    else (void) DebugLog_Printf("FLASH DMA init failed %u\r\n", flashInit);
+    (void) EthProbe_Start();
+  }
+  /* Power owns the ETH/AMC rails from here on (started after EthProbe_Start). */
+  if (!Power_Start())
+    (void) DebugLog_Printf("PWR: start failed\r\n");
   Supervisor_BootComplete();
 
   /* Infinite loop */

@@ -1,5 +1,6 @@
 #include "acquisition.h"
 #include "debug_log.h"
+#include "supervisor.h"
 #include "main.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -246,6 +247,7 @@ static void acquisitionTask(void *arg)
 
   for (;;) {
     bool got = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(STALL_MS)) != 0U;
+    Supervisor_TaskHeartbeat(SUP_TASK_ACQ);   /* task alive; data health is in the snapshot */
     bool adcOverrun = (ADC123_COMMON->CSR & (ADC_CSR_OVR1 | ADC_CSR_OVR2)) != 0U;
     if (!got || dmaError || adcOverrun) {
       setRunning(false, false, 0U, false);
@@ -276,11 +278,6 @@ static void acquisitionTask(void *arg)
 bool Acquisition_Start(void)
 {
   if (task != NULL) return true;
-#if ACQ_AMC_FITTED
-  /* TEMPORARY until the Power service (Phase 4) owns the rails: turn on +3.3V_AMC (PC10)
-   * so the AMC3330 channels can be measured. Power will request/release it later. */
-  HAL_GPIO_WritePin(En_3v3_AMC_GPIO_Port, En_3v3_AMC_Pin, GPIO_PIN_SET);
-#endif
   memset(&snap, 0, sizeof(snap));
   for (unsigned int ch = 0; ch < ACQ_AC_CHANNELS; ch++)
     snap.ac_v[ch].validity = ACQ_AMC_FITTED ? ACQ_NO_DATA : ACQ_NOT_FITTED;

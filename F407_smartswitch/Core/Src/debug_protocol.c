@@ -3,6 +3,7 @@
 #include "pca9536.h"
 #include "acquisition.h"
 #include "control.h"
+#include "boot.h"
 #include "main.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -97,6 +98,10 @@ static void handleLine(char *line)
     (void)snprintf(body, sizeof(body), "%s,BATV,%u,%lu,3000", seq,
         (unsigned)raw, (unsigned long)mv);
     response(body); return;
+  }
+  if (strcmp(line + 4, "CLRSAFE") == 0) {   /* clear the boot-loop counter (S6-5) */
+    Boot_ClearResetCount();
+    (void)snprintf(body, sizeof(body), "%s,CLRSAFE,OK", seq); response(body); return;
   }
   if (strcmp(line + 4, "BACKUP") == 0) {
     uint16_t raw;
