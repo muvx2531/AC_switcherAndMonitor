@@ -105,9 +105,12 @@ static void buildStatus(void)
   put("\"ac\":[");
   for (unsigned int i = 0; i < ACQ_AC_CHANNELS; i++) {
     if (a.ac_v[i].validity == ACQ_VALID)
-      put("%s{\"state\":\"VALID\",\"v_x10\":%ld}", i ? "," : "", (long)a.ac_v[i].value);
-    else
-      put("%s{\"state\":\"%s\",\"v_x10\":null}", i ? "," : "", Acquisition_ValidityName(a.ac_v[i].validity));
+      put("%s{\"state\":\"VALID\",\"v_x10\":%ld,\"rms_raw\":%u}", i ? "," : "", (long)a.ac_v[i].value, a.ac_v[i].raw);
+    else if (a.ac_v[i].validity == ACQ_NOT_FITTED)
+      put("%s{\"state\":\"NOT_FITTED\",\"v_x10\":null,\"rms_raw\":null}", i ? "," : "");
+    else  /* rms_raw: diagnostic counts of (P-N), shown even when the value is not trusted */
+      put("%s{\"state\":\"%s\",\"v_x10\":null,\"rms_raw\":%u}", i ? "," : "",
+          Acquisition_ValidityName(a.ac_v[i].validity), a.ac_v[i].raw);
   }
   put("]},");
 

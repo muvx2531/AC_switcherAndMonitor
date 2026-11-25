@@ -17,7 +17,7 @@
  * Board option: the AMC3330 isolated voltage sensors may be unpopulated. With
  * ACQ_AMC_FITTED 0 the AC voltage channels report NOT_FITTED and never a number. */
 #ifndef ACQ_AMC_FITTED
-#define ACQ_AMC_FITTED 0
+#define ACQ_AMC_FITTED 1
 #endif
 
 #define ACQ_AC_CHANNELS 4U

@@ -276,6 +276,11 @@ static void acquisitionTask(void *arg)
 bool Acquisition_Start(void)
 {
   if (task != NULL) return true;
+#if ACQ_AMC_FITTED
+  /* TEMPORARY until the Power service (Phase 4) owns the rails: turn on +3.3V_AMC (PC10)
+   * so the AMC3330 channels can be measured. Power will request/release it later. */
+  HAL_GPIO_WritePin(En_3v3_AMC_GPIO_Port, En_3v3_AMC_Pin, GPIO_PIN_SET);
+#endif
   memset(&snap, 0, sizeof(snap));
   for (unsigned int ch = 0; ch < ACQ_AC_CHANNELS; ch++)
     snap.ac_v[ch].validity = ACQ_AMC_FITTED ? ACQ_NO_DATA : ACQ_NOT_FITTED;
