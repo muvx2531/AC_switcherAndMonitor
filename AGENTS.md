@@ -50,6 +50,10 @@ shared by all boards and lives in the untracked `Core/Inc/web_secrets.h`
 
 The Acquisition service (`acquisition.c`, `docs/phase3-acquisition.md`) is the only owner
 of ADC1/ADC2, TIM3 and DMA2 Stream0; read measurements with `Acquisition_GetSnapshot`.
+Phase 4 (`docs/phase4-power.md`): `power.c` owns the ETH (PE0, via `EthProbe_Suspend/Resume`)
+and AMC (PC10) rails; ETH is off while 24 V is absent. Tasks register with the Supervisor by
+calling `Supervisor_TaskHeartbeat` (< 2 s). Five resets within 10 min (also quick reflashes)
+enter safe mode; clear with serial `CLRSAFE`.
 Fit the DIS_WDT jumper before flashing images larger than 128 KB (sector erase > WDT timeout).
 
 For the temporary USART6 command interface, read docs/serial-protocol.md. SET can actuate relays; checksum is not authentication.

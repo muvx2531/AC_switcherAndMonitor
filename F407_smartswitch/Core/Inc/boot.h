@@ -26,4 +26,18 @@ void Boot_SafeUnusedInterfaces(void);
 void Boot_SetRtcKept(bool kept);
 bool Boot_RtcKept(void);
 
+/* Boot-loop detection (decision S6-5). Call once from the default task after the RTC
+ * is initialized. Counts resets except POWER_ON in BKP DR5 (count) / DR6 (window start,
+ * RTC seconds). With a kept RTC the window is 10 min; without it the count is
+ * consecutive and Supervisor clears it after 10 min of uptime. >= 5 -> safe mode:
+ * only Control, Power and Supervisor run (no network, storage, acquisition). */
+#define BOOT_SAFE_MODE_RESETS 5U
+#define BOOT_SAFE_MODE_WINDOW_S 600U
+void Boot_EvaluateSafeMode(void);
+bool Boot_SafeMode(void);
+uint32_t Boot_ResetCount(void);
+/* Clear the reset counter (stable uptime reached, or serial CLRSAFE). Takes effect
+ * at the next reset; a running safe mode stays until then. */
+void Boot_ClearResetCount(void);
+
 #endif

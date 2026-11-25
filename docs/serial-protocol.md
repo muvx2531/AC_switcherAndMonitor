@@ -19,6 +19,7 @@ Body begins with a two-hex-digit caller-selected sequence, followed by a comma:
 |---|---|
 | `01,GET` | Read PCA9536 output latch, input levels and direction |
 | `02,SET,5` | Set the four output latch bits to hex `5` (IO3..IO0 = 0101) |
+| `03,CLRSAFE` | Clear the boot-loop reset counter (safe mode, Phase 4); reply `03,CLRSAFE,OK`, effective at the next reset |
 
 Examples on wire (`\r\n` follows each line):
 

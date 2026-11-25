@@ -1,5 +1,7 @@
 # Power task
 
+**สถานะ implement:** `docs/phase4-power.md` (2026-11-25) LOW_POWER ไม่ลด clock, ปิด ETH หลัง 24 V หาย 2 s, กลับหลัง 1 s
+
 ## หน้าที่
 รู้สถานะไฟเข้าและแบต คุม rail enable ทั้งหมดและกฎกันไฟย้อน ตัดสินโหมด
 MAINS / BACKUP / LOW_POWER แล้วแจ้งข้อเท็จจริงให้ Control (S2-1) Power **ไม่สั่งรีเลย์**
@@ -7,7 +9,7 @@ MAINS / BACKUP / LOW_POWER แล้วแจ้งข้อเท็จจร�
 ## Owns
 | Resource | หมายเหตุ |
 |---|---|
-| PB3 Vin_Detect (สถานะยืนยันระยะยาว) | หลัง F101 (S2-3) polarity รอยืนยัน (open-items H2) Control ตอบสนองขาลงเองตามกฎ (ค) |
+| PB3 Vin_Detect (สถานะยืนยันระยะยาว) | หลัง F101 (S2-3) HIGH = มี 24 V (H2) Control ยืนยันขาและตอบสนองเองตามกฎ (ค) Power ใช้ `coil_supply` ของ Control เป็นข้อเท็จจริง |
 | PB9 eFuse_iLim | low = ไฟเข้าบอร์ดหาย/UVLO/OVP/ILIM ใช้แยกสาเหตุ |
 | PE13 Batt_status (CHRG), PE11 Batt_FAULT | LT3652 active-low |
 | PE0 En_3v3_ETH, PC10 En_3v3_AMC | service อื่น "ขอ" rail ห้ามสั่งขาเอง |

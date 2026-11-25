@@ -80,7 +80,7 @@ label.f input,label.f select{color:var(--fg);font-family:var(--mono)}
     <p class="note" style="margin:-6px 0 0">Relay cards show the PCA9536 latch read-back only. LOW = coil off = load on (NC contacts). Contact state is not measured (AMC3330 voltage sensors).</p>
     <div class="row r3">
       <div class="card"><h2>Power inputs <span class="badge warn">raw</span></h2><dl class="kv" id="power"></dl>
-        <p class="note">Vin_Detect HIGH = 24 V present (verified 2026-11-24, H2). Other values are raw GPIO levels.</p></div>
+        <p class="note">Vin_Detect HIGH = 24 V present (verified 2026-11-24, H2). On battery (BACKUP) the board turns Ethernet off, so this page is unreachable until 24 V returns.</p></div>
       <div class="card"><h2>Battery</h2><dl class="kv" id="battery"></dl><div class="bar"><i id="vbat-bar" style="width:0"></i></div>
         <p class="note">Mean over 1 s from the Acquisition service. Nominal 3.000 V reference and divider; not calibrated.</p></div>
       <div class="card"><h2>AC measurement</h2><dl class="kv" id="acq"></dl>
@@ -183,7 +183,9 @@ function renderStatus(d) {
   $("relays").innerHTML = [0, 1, 2, 3].map(ch => { const [m, c, t] = relayState(d, ch);
     return `<div class="card"><div class="ch">CH${ch + 1}</div><div class="big">${badge(m, c)}</div><p class="note">${t}</p></div>`; }).join("");
   $("power").innerHTML = kv([["Vin_Detect (PB3)", lvl(d.power.vin_detect)], ["eFuse_iLim (PB9)", lvl(d.power.efuse_ilim)],
-    ["Batt CHRG (PE13)", lvl(d.power.chrg)], ["Batt FAULT (PE11)", lvl(d.power.fault)]]);
+    ["Batt CHRG (PE13)", lvl(d.power.chrg)], ["Batt FAULT (PE11)", lvl(d.power.fault)],
+    ...(d.power.mode ? [["Supply mode", badge(d.power.mode, d.power.mode === "MAINS" ? "ok" : "warn")],
+      ["ETH / AMC rail", `${d.power.eth_rail ? "on" : "off"} / ${d.power.amc_rail ? "on" : "off"}`]] : [])]);
   const vb = d.vbat;
   $("battery").innerHTML = kv([["ADC raw (IN13)", vb.ok ? vb.raw : badge("n/a", "bad")],
     ["Estimated", vb.ok ? (vb.mv_est / 1000).toFixed(2) + " V" : "—"], ["Pack", "LiFePO4 2S"]]);
@@ -209,7 +211,9 @@ function renderStatus(d) {
   const s = d.sys;
   const wd = s.watchdog;
   $("sys").innerHTML = kv([["Uptime", uptime(d.fw.uptime_ms)], ["Last reset", esc(s.reset_cause || "—")],
-    ["Watchdog", wd ? (wd.phase === "run" ? badge("supervised", "ok") : wd.phase === "boot" ? badge("boot phase", "warn") : badge(wd.phase, "bad")) : "—"],
+    ["Watchdog", wd ? (wd.phase === "run" ? badge("supervised", "ok") : wd.phase === "boot" ? badge("boot phase", "warn") : badge(wd.phase + (wd.lost ? ": " + wd.lost : ""), "bad")) : "—"],
+    ["Safe mode", s.safe_mode == null ? "—" : s.safe_mode ? badge("ON", "bad") : badge("off", "ok")],
+    ["Reset count (loop check)", s.reset_count ?? "—"],
     ["RTC across reset", s.rtc_kept == null ? "—" : s.rtc_kept ? badge("kept", "ok") : badge("reset to default", "warn")],
     ["I2C bus recoveries", s.i2c_recoveries ?? "—"],
     ["Heap free", s.heap_free + " B"], ["Heap minimum ever", s.heap_min + " B"],
@@ -371,13 +375,13 @@ function mockStatus() {
     net: { link: true, mode: "dhcp", ip: "192.168.1.10", mask: "255.255.255.0", gw: "192.168.1.1", mac: "06:3A:1F:52:9C:04", phy_id: "0007:C131" },
     relay: { ok: true, err: 0, output: M.output, input: 0xF0 | M.output, config: 0xF0 },
     control: { available: true, state_known: true, coil_supply: on24, cycle_remaining_s: M.cycles.map(c => c ? Math.ceil((c - Date.now()) / 1000) : 0) },
-    power: { vin_detect: on24 ? 1 : 0, efuse_ilim: on24 ? 1 : 0, chrg: 1, fault: 1 },
+    power: { vin_detect: on24 ? 1 : 0, efuse_ilim: on24 ? 1 : 0, chrg: 1, fault: 1, mode: on24 ? "MAINS" : "BACKUP", mode_age_s: 5, eth_rail: on24, amc_rail: on24, transitions: 0, eth_resume_fail: 0, reason: "boot" },
     vbat: { ok: true, state: "VALID", raw: 3207 + (t / 1000 % 3 | 0), mv_est: 6553, age_ms: 400 },
     acq: { running: true, restarts: 0, missed: 0, cycles: t / 20 | 0, cal: 0, ct: { state: "VALID", ma: 420 + (t / 1000 % 5 | 0) * 10, dc_raw: 2047 },
            ac: [0, 1, 2, 3].map(() => ({ state: "NOT_FITTED", v_x10: null })) },
     amc_diag: [1, 1, 1, 0],
     flash: [{ ok: true, jedec: "EF 40 18" }, { ok: true, jedec: "EF 40 18" }],
-    sys: { heap_free: 24800, heap_min: 15912, heap_total: 49152, reset_cause: "POWER_ON", watchdog: { phase: "run" }, rtc_kept: true, i2c_recoveries: 1, log: { queued: 0, high: 412, dropped: 0, dma_start_err: 0, dma_xfer_err: 0 },
+    sys: { heap_free: 24800, heap_min: 15912, heap_total: 49152, reset_cause: "POWER_ON", reset_count: 0, safe_mode: false, watchdog: { phase: "run", lost: null }, rtc_kept: true, i2c_recoveries: 1, log: { queued: 0, high: 412, dropped: 0, dma_start_err: 0, dma_xfer_err: 0 },
       tasks: [{ name: "defaultTask", prio: 24, stack_free: 180 }, { name: "debugRx", prio: 25, stack_free: 310 }, { name: "debugTx", prio: 2, stack_free: 120 },
               { name: "netTask", prio: 18, stack_free: 413 }, { name: "httpServer", prio: 16, stack_free: 52 }] },
   };
