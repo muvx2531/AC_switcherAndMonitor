@@ -3,11 +3,13 @@
 #include "task.h"
 #include "semphr.h"
 #include <stdbool.h>
+#include <string.h>
 
 static I2C_HandleTypeDef *i2c;
 static StaticSemaphore_t mutexStorage, doneStorage;
 static SemaphoreHandle_t mutex, done;
 static uint8_t dmaByte;
+static uint8_t dmaBlock[I2C_BUS_BLOCK_MAX];   /* SRAM (not CCM): DMA source for block writes */
 static volatile bool active, failed, faulted;
 static volatile uint32_t lastError;
 static uint32_t recoveries;
@@ -112,16 +114,18 @@ void I2cBus_Unlock(void) { (void)xSemaphoreGive(mutex); }
 uint32_t I2cBus_LastHalError(void) { return lastError; }
 uint32_t I2cBus_RecoveryCount(void) { return recoveries; }
 
-static I2cBusResult transfer(uint8_t address, uint8_t reg, uint8_t *value, bool write)
+static I2cBusResult transfer(uint8_t address, uint8_t reg, uint8_t *value, bool write, uint16_t len)
 {
-  if (address > 0x7fU || !value) return I2C_BUS_INVALID;
+  if (address > 0x7fU || !value || len == 0U || len > I2C_BUS_BLOCK_MAX) return I2C_BUS_INVALID;
   while (xSemaphoreTake(done, 0) == pdTRUE) { }
   failed = false;
   lastError = 0;
-  if (write) dmaByte = *value;
+  uint8_t *src = &dmaByte;
+  if (write && len > 1U) { memcpy(dmaBlock, value, len); src = dmaBlock; }
+  else if (write) dmaByte = *value;
   active = true;
   HAL_StatusTypeDef s = write ? HAL_I2C_Mem_Write_DMA(i2c, (uint16_t)address << 1,
-      reg, I2C_MEMADD_SIZE_8BIT, &dmaByte, 1) :
+      reg, I2C_MEMADD_SIZE_8BIT, src, len) :
       HAL_I2C_Mem_Read_DMA(i2c, (uint16_t)address << 1, reg,
       I2C_MEMADD_SIZE_8BIT, &dmaByte, 1);
   if (s != HAL_OK) {
@@ -147,9 +151,11 @@ static I2cBusResult transfer(uint8_t address, uint8_t reg, uint8_t *value, bool 
   return I2C_BUS_OK;
 }
 I2cBusResult I2cBus_ReadRegLocked(uint8_t address, uint8_t reg, uint8_t *value)
-{ return transfer(address, reg, value, false); }
+{ return transfer(address, reg, value, false, 1U); }
 I2cBusResult I2cBus_WriteRegLocked(uint8_t address, uint8_t reg, uint8_t value)
-{ return transfer(address, reg, &value, true); }
+{ return transfer(address, reg, &value, true, 1U); }
+I2cBusResult I2cBus_WriteBlockLocked(uint8_t address, uint8_t reg, const uint8_t *data, uint16_t len)
+{ return transfer(address, reg, (uint8_t *)data, true, len); }
 
 static void signalDone(I2C_HandleTypeDef *handle, bool error)
 {

@@ -1,7 +1,7 @@
 #ifndef BL_MAIN_H
 #define BL_MAIN_H
 
-#define BL_VERSION "1.0.0"
+#define BL_VERSION "1.1.0"
 
 /* Configure PE7 and toggle it once (before HAL_Init): the STWD100 times out after 1.12 s. */
 void Bl_EarlyWdtKick(void);

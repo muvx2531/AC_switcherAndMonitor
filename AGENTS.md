@@ -58,7 +58,9 @@ AC power quality (`power_quality.c`, `docs/ac-quality.md`) runs inside the Acqui
 Each CLI flash with `mode=UR ... -rst` counts as two resets toward safe mode.
 Bootloader + FOTA (`Bootloader/`, `docs/phase5b-bootloader.md`): the application is linked at
 0x08008000 and needs the bootloader at 0x08000000 (build the bootloader **Release**). The
-bootloader must never touch I2C/PCA9536, the RTC or the RCC reset flags. Release images:
+bootloader must never address the PCA9536, the RTC or the RCC reset flags; it writes the OLED
+(0x3C) only during flash work (`docs/local-ui-status.md`). The LED and OLED belong to
+`local_ui.c`; share `ssw_oled.*` identically between both projects. Release images:
 `python tools/make_ssw.py`. Keep `ssw_image.h` / `ssw_sha256.*` identical in both projects.
 Fit the DIS_WDT jumper before flashing images larger than 128 KB (sector erase > WDT timeout).
 

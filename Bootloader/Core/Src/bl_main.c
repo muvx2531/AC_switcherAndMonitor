@@ -1,9 +1,12 @@
 /* SmartSwitch bootloader (docs/phase5b-bootloader.md).
  *
- * Rules: never touch I2C / PCA9536 (relay state, I1-I4), never touch the RTC or the
- * backup domain, never clear the RCC reset flags (the application reads them), keep the
- * STWD100 fed (PE7, timeout 1.12 s) including during internal flash sector erases
- * (code in RAM, interrupts off, toggling by cycle count).
+ * Rules: never address the PCA9536 (relay state, I1-I4): I2C1 is used only to write the
+ * OLED (0x3C) and only while there is flash work to show (install, rollback, repair,
+ * rescue); a normal boot sends nothing on I2C. No bus recovery clocks here (a slave left
+ * mid-byte could complete a write); on any I2C error the OLED is skipped for this boot.
+ * Never touch the RTC or the backup domain, never clear the RCC reset flags (the
+ * application reads them), keep the STWD100 fed (PE7, timeout 1.12 s) including during
+ * internal flash sector erases (code in RAM, interrupts off, toggling by cycle count).
  *
  * External flash chip 2: staging slot, backup slot, boot record A/B (ssw_image.h).
  * There is always a complete copy of a working image outside the internal flash before
@@ -13,12 +16,18 @@
 #include "main.h"
 #include "ssw_image.h"
 #include "ssw_sha256.h"
+#include "ssw_oled.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 
 extern SPI_HandleTypeDef hspi2;
 extern UART_HandleTypeDef huart6;
+extern I2C_HandleTypeDef hi2c1;
+
+/* LED (PC11): steady on during a normal boot, fast flicker while flash work runs. */
+static bool ledFlicker;
+static uint32_t ledLast;
 
 /* ---- watchdog ------------------------------------------------------------- */
 static uint32_t lastKick;
@@ -35,6 +44,7 @@ static void kick(void)
 {
   uint32_t now = HAL_GetTick();
   if (now - lastKick >= 100U) { lastKick = now; HAL_GPIO_TogglePin(Clr_wdt_GPIO_Port, Clr_wdt_Pin); }
+  if (ledFlicker && now - ledLast >= 100U) { ledLast = now; HAL_GPIO_TogglePin(LED_Blue_GPIO_Port, LED_Blue_Pin); }
 }
 
 /* ---- log (USART6, polling) ------------------------------------------------ */
@@ -68,6 +78,69 @@ static void logbuild(const char *b)
 static void logver(uint32_t v)
 {
   logu(v >> 16); logs("."); logu((v >> 8) & 255U); logs("."); logu(v & 255U);
+}
+
+/* ---- OLED (I2C1 0x3C, blocking) -------------------------------------------- */
+static uint8_t fb[SSW_OLED_FB_SIZE];
+static bool oledTried, oledOk;
+static uint32_t progLo, progHi, progLast;
+static const char *progLabel = "";
+
+static bool oledWrite(uint8_t ctrl, const uint8_t *data, uint16_t len)
+{
+  if (oledTried && !oledOk) return false;
+  kick();
+  if (HAL_I2C_Mem_Write(&hi2c1, (uint16_t)(SSW_OLED_ADDR << 1), ctrl, I2C_MEMADD_SIZE_8BIT,
+                        (uint8_t *)data, len, 30) != HAL_OK) {
+    oledOk = false; oledTried = true;
+    logs("BL: OLED not responding, display skipped\r\n");
+    return false;
+  }
+  return true;
+}
+
+static void verStr(char *o, uint32_t v)       /* "1.2.3" */
+{
+  uint32_t part[3] = { v >> 16, (v >> 8) & 255U, v & 255U };
+  for (int i = 0; i < 3; i++) {
+    char t[4]; int n = 0; uint32_t x = part[i];
+    do { t[n++] = (char)('0' + x % 10U); x /= 10U; } while (x && n < 3);
+    while (n) *o++ = t[--n];
+    if (i < 2) *o++ = '.';
+  }
+  *o = 0;
+}
+
+/* Full screen: inverted title, two text lines, empty progress line. Starts flash-work mode
+ * (LED flicker) and initializes the panel on first use in this boot. */
+static void screen(const char *title, const char *l1, const char *l2)
+{
+  ledFlicker = true;
+  if (!oledTried) { oledTried = true; oledOk = true; if (!SswOled_Init(oledWrite, 0xCF)) return; }
+  if (!oledOk) return;
+  SswOled_Clear(fb);
+  SswOled_Text(fb, 1, 0, title, true);
+  SswOled_Text(fb, 0, 1, l1, false);
+  SswOled_Text(fb, 0, 2, l2, false);
+  (void)SswOled_Flush(oledWrite, fb, 0, 3);
+  progLast = HAL_GetTick() - 1000U;
+}
+
+/* Progress line: label + bar. A phase covers [lo, hi] permille of the whole job. */
+static void phase(const char *label, uint32_t lo, uint32_t hi)
+{
+  progLabel = label; progLo = lo; progHi = hi; progLast = HAL_GetTick() - 1000U;
+}
+
+static void progress(uint32_t done, uint32_t total)
+{
+  if (!oledOk || HAL_GetTick() - progLast < 250U) return;
+  progLast = HAL_GetTick();
+  uint32_t pm = progLo + (total ? (uint32_t)(((uint64_t)(progHi - progLo) * done) / total) : 0U);
+  SswOled_ClearLine(fb, 3);
+  SswOled_Text(fb, 0, 3, progLabel, false);
+  SswOled_Bar(fb, 48, 3, 80, pm);
+  (void)SswOled_Flush(oledWrite, fb, 3, 3);
 }
 
 /* ---- external flash (chip 2, polling) ------------------------------------- */
@@ -158,6 +231,7 @@ static bool eraseAppRange(uint32_t size)
   HAL_FLASH_Unlock();
   bool ok = true;
   for (uint32_t s = first; ok && s <= last; s++) {
+    progress(s - first, last - first + 1U);
     __disable_irq();
     uint32_t err = ramEraseSector(s);
     __enable_irq();
@@ -220,7 +294,9 @@ static bool xfSha(uint32_t addr, uint32_t len, uint8_t out[32])
 {
   SswSha256 c;
   SswSha256_Init(&c);
+  uint32_t total = len;
   while (len) {
+    progress(total - len, total);
     uint32_t n = len > sizeof(buf) ? sizeof(buf) : len;
     if (!xfRead(addr, buf, n)) return false;
     SswSha256_Update(&c, buf, n); addr += n; len -= n;
@@ -277,13 +353,18 @@ static bool backupInternal(SswBootRecord *br)
   uint32_t size = h->image_end - SSW_APP_ADDR;
   logs("BL: backup "); logu(size); logs(" bytes\r\n");
   br->backup_size = 0;                                    /* invalid until verified */
-  for (uint32_t off = 0; off < size; off += 4096U)
+  phase("Backup", 100, 450);
+  for (uint32_t off = 0; off < size; off += 4096U) {
+    progress(off, 2U * size);
     if (!xfErase4k(SSW_SLOT_BACKUP + off)) return false;
+  }
   for (uint32_t off = 0; off < size; off += 256U) {
     uint32_t n = size - off > 256U ? 256U : size - off;
     if (!xfProgram(SSW_SLOT_BACKUP + off, (const uint8_t *)(SSW_APP_ADDR + off), n)) return false;
+    progress(size + off, 2U * size);
     kick();
   }
+  phase("Check", 450, 500);
   SswSha256 c; uint8_t src[32], dst[32];
   SswSha256_Init(&c);
   SswSha256_Update(&c, (const void *)SSW_APP_ADDR, size);
@@ -298,7 +379,10 @@ static bool backupInternal(SswBootRecord *br)
 static bool programFromSlot(uint32_t slot, uint32_t size, const uint8_t expectedSha[32])
 {
   logs("BL: programming "); logu(size); logs(" bytes from slot "); logx(slot); logs("\r\n");
+  uint32_t lo = progLo, hi = progHi, span = hi - lo;
+  phase("Erase", lo, lo + span / 5U);
   if (!eraseAppRange(size)) return false;
+  phase("Write", lo + span / 5U, hi - span / 20U);
   HAL_FLASH_Unlock();
   bool ok = true;
   for (uint32_t off = 0; ok && off < size; off += sizeof(buf)) {
@@ -309,10 +393,13 @@ static bool programFromSlot(uint32_t slot, uint32_t size, const uint8_t expected
       memcpy(&w, &buf[i], (n - i) >= 4U ? 4U : n - i);
       ok = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, SSW_APP_ADDR + off + i, w) == HAL_OK;
     }
+    progress(off, size);
     kick();
   }
   HAL_FLASH_Lock();
   if (!ok) { logs("BL: program error\r\n"); return false; }
+  phase("Check", hi - span / 20U, hi);
+  progress(0, 1);
   SswSha256 c; uint8_t d[32];
   SswSha256_Init(&c);
   SswSha256_Update(&c, (const void *)SSW_APP_ADDR, size);
@@ -326,7 +413,9 @@ static bool installStaging(const SswHeader *h)
   /* the staging hash covers the payload; verify the whole image incl. header instead */
   uint32_t size = h->image_end - SSW_APP_ADDR;
   uint8_t whole[32];
+  phase("Verify", 550, 600);
   if (!xfSha(SSW_SLOT_STAGING, size, whole)) return false;
+  phase("Write", 600, 1000);
   return programFromSlot(SSW_SLOT_STAGING, size, whole);
 }
 
@@ -334,10 +423,12 @@ static bool restoreBackup(const SswBootRecord *br)
 {
   if (br->backup_size == 0U || br->backup_size == 0xFFFFFFFFU || br->backup_size > SSW_APP_MAX) return false;
   uint8_t d[32];
+  phase("Verify", 0, 100);
   if (!xfSha(SSW_SLOT_BACKUP, br->backup_size, d) || memcmp(d, br->backup_sha, 32) != 0) {
     logs("BL: backup slot corrupt\r\n");
     return false;
   }
+  phase("Write", 100, 1000);
   return programFromSlot(SSW_SLOT_BACKUP, br->backup_size, br->backup_sha);
 }
 
@@ -350,6 +441,9 @@ static void jumpToApp(void)
   HAL_GPIO_TogglePin(Clr_wdt_GPIO_Port, Clr_wdt_Pin);
   (void)HAL_SPI_DeInit(&hspi2);
   (void)HAL_UART_DeInit(&huart6);
+  (void)HAL_I2C_DeInit(&hi2c1);                 /* pins back to input, DMA streams off */
+  __HAL_RCC_I2C1_FORCE_RESET(); __HAL_RCC_I2C1_RELEASE_RESET();
+  __HAL_RCC_DMA1_FORCE_RESET(); __HAL_RCC_DMA1_RELEASE_RESET();
   HAL_GPIO_DeInit(GPIOD, SPI_CS1_Pin | SPI_CS2_Pin);
   HAL_GPIO_DeInit(LED_Blue_GPIO_Port, LED_Blue_Pin);
   __disable_irq();
@@ -377,10 +471,13 @@ static void jumpToApp(void)
 static void rescue(void)
 {
   logs("BL: RESCUE - no valid firmware. Program with ST-LINK at 0x08008000.\r\n");
+  screen("NO VALID FIRMWARE", "Program with ST-LINK", "at 0x08008000");
+  if (oledOk) { SswOled_Text(fb, 0, 3, "Bootloader " BL_VERSION, false); (void)SswOled_Flush(oledWrite, fb, 3, 3); }
+  ledFlicker = false;                            /* rescue: 1 s on / 1 s off */
   uint32_t t = 0;
   for (;;) {
     kick();
-    if (HAL_GetTick() - t >= 100U) { t = HAL_GetTick(); HAL_GPIO_TogglePin(LED_Blue_GPIO_Port, LED_Blue_Pin); }
+    if (HAL_GetTick() - t >= 1000U) { t = HAL_GetTick(); HAL_GPIO_TogglePin(LED_Blue_GPIO_Port, LED_Blue_Pin); }
     static uint32_t say;
     if (HAL_GetTick() - say >= 5000U) { say = HAL_GetTick(); logs("BL: rescue mode\r\n"); }
   }
@@ -405,6 +502,7 @@ void Bl_Main(void)
 
   for (int guard = 0; guard < 6; guard++) {
     if (br.state == SSW_BR_PENDING) {
+      phase("Verify", 0, 100);
       if (!stagingValid(&stg)) {
         logs("BL: staging image invalid, install cancelled\r\n");
         br.state = SSW_BR_IDLE; br.result = SSW_RES_INSTALL_FAILED; br.result_version = 0;
@@ -412,6 +510,7 @@ void Bl_Main(void)
         continue;
       }
       logs("BL: install "); logver(stg.fw_version); logs(" ("); logbuild(stg.fw_build); logs(")\r\n");
+      { char l1[22] = "Installing "; verStr(l1 + 11, stg.fw_version); screen("FIRMWARE UPDATE", l1, "DO NOT POWER OFF"); }
       if (curOk && !backupInternal(&br)) {
         logs("BL: backup failed, install cancelled\r\n");
         br.state = SSW_BR_IDLE; br.result = SSW_RES_INSTALL_FAILED; br.result_version = stg.fw_version;
@@ -423,13 +522,18 @@ void Bl_Main(void)
       continue;
     }
     if (br.state == SSW_BR_INSTALLING) {
-      if (stagingValid(&stg) && installStaging(&stg)) {
+      if (!ledFlicker) screen("FIRMWARE UPDATE", "Resuming install", "DO NOT POWER OFF");
+      phase("Verify", 500, 550);
+      bool stgOk = stagingValid(&stg);
+      if (stgOk && installStaging(&stg)) {
         br.state = SSW_BR_TRIAL; br.trial_boots = 0; br.result = SSW_RES_NONE; br.result_version = stg.fw_version;
         (void)brWrite(&br);
         curOk = internalValid(&cur, &curDev);
         logs("BL: installed, trial run\r\n");
+        { char l1[22] = "Installed "; verStr(l1 + 10, stg.fw_version); screen("FIRMWARE UPDATE", l1, "Starting, trial run"); }
       } else {
         logs("BL: install failed, restoring backup\r\n");
+        screen("UPDATE FAILED", "Restoring previous", "DO NOT POWER OFF");
         br.state = SSW_BR_ROLLBACK; br.result = SSW_RES_INSTALL_FAILED; br.result_version = stg.fw_version;
         (void)brWrite(&br);
       }
@@ -449,12 +553,14 @@ void Bl_Main(void)
     }
     if (br.state == SSW_BR_ROLLBACK) {
       if (br.result == SSW_RES_NONE) userRollback = true;
+      screen("RESTORING FIRMWARE", userRollback ? "Back to previous FW" : "New FW not confirmed", "DO NOT POWER OFF");
       if (restoreBackup(&br)) {
         br.state = SSW_BR_IDLE;
         if (userRollback) br.result = SSW_RES_RESTORED;
         (void)brWrite(&br);
         curOk = internalValid(&cur, &curDev);
         logs("BL: backup restored\r\n");
+        screen("RESTORING FIRMWARE", "Previous FW restored", "Starting");
       } else {
         logs("BL: rollback impossible\r\n");
         br.state = SSW_BR_IDLE;
@@ -468,6 +574,7 @@ void Bl_Main(void)
   if (!curOk) {
     /* corrupt or missing image: repair from backup, else from a valid staging image */
     logs("BL: internal image invalid\r\n");
+    screen("REPAIRING FIRMWARE", "Firmware damaged", "DO NOT POWER OFF");
     SswBootRecord rb = br;
     if (restoreBackup(&rb)) {
       br.result = SSW_RES_REPAIRED; (void)brWrite(&br);

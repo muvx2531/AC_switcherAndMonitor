@@ -37,6 +37,7 @@
 #include "storage.h"
 #include "ssw_image.h"
 #include "fota.h"
+#include "local_ui.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -909,6 +910,9 @@ void StartDefaultTask(void *argument)
    * even when the read failed, in state UNKNOWN (I3). */
   if (!Control_Start())
     (void) DebugLog_Printf("CTRL: start failed\r\n");
+  /* LED + OLED status (also in safe mode); its OLED traffic waits for Control (S6-1). */
+  if (!LocalUi_Start())
+    (void) DebugLog_Printf("UI: start failed\r\n");
   if (!Boot_SafeMode()) {
     /* Storage first: Acquisition reads the board config and the saved energy counter. */
     W25Q128_Result flashInit = W25Q128_Init(&hspi2);
@@ -947,8 +951,7 @@ void StartDefaultTask(void *argument)
       flashTestRequest = 0U;
       FlashDmaTest_Scan();
     }
-    HAL_GPIO_TogglePin(LED_Blue_GPIO_Port, LED_Blue_Pin);
-    (void) DebugLog_Printf("SmartSwitch: USART6 DMA and LED heartbeat\r\n");
+    (void) DebugLog_Printf("SmartSwitch: heartbeat\r\n");   /* LED is owned by local_ui.c */
     EthProbe_Report();
     Fota_Tick();   /* trial confirmation, reboot after install / rollback request */
     osDelay(500);
