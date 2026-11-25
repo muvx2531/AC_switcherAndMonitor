@@ -72,7 +72,21 @@ keeps running (coin cell). Setting the clock comes with the network settings (Ph
 | Config A/B | `AMC,1` and `CTPH,0` queued -> config seq 2 -> survives reset |
 | Status / stacks | storage 414 words free, HTTP 287, acq 331, power 266; heap minimum unchanged; 0 write errors, 0 dropped |
 
-Not tested yet: energy restore after reset (needs a checkpoint: 10 min uptime or a 24 V
+| 24 V removed for ~5 s | energy checkpoint written on MAINS -> BACKUP (27 mWh); events: 24 V lost, rule (c) released CH2, BACKUP, 24 V present, MAINS |
+| Reset after that | counter restored (resumed from 27 mWh, not 0) |
+| Full power cut (24 V and battery off ~10 s) | boot `POWER_ON`, reset count 0, RTC kept (coin cell), all relays ON (I4); storage READY with all 31 events, 11 history records, config seq 2 and the 32 mWh checkpoint intact; 0 write errors |
+
+Bug found and fixed during the 24 V test: switching the AMC rail off (BACKUP) collapsed the
+measured line voltage and logged a false 0.46 s interruption. Events that started less than
+200 ms before the rail goes off are now cancelled; a real outage that started earlier is kept
+and closed as "measurement stopped". Re-test: no false event.
+
+Energy used after the last checkpoint is lost on a reset without BACKUP (checkpoint every
+10 min); a real outage always passes through BACKUP and saves the counter.
+
+Not tested yet: a power cut exactly during a flash program/erase (records are CRC-checked and
+rings resume from the last valid record, but not provoked on purpose), ring wrap-around,
+UNFORMATTED path with foreign data, 30-day history read time (needs a checkpoint: 10 min uptime or a 24 V
 removal), power cut during a config / log write (Phase 5 gate), ring wrap-around, UNFORMATTED
 path with foreign data, 30-day history read time.
 

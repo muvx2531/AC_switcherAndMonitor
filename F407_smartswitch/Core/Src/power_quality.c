@@ -1,6 +1,7 @@
 #include "power_quality.h"
 #include "control.h"
 #include "storage.h"
+#include "main.h"
 #include <math.h>
 #include <string.h>
 
@@ -121,9 +122,24 @@ static void closeEvent(bool openEnded)
   evState = PQ_EV_NONE;
 }
 
+static AcqPqEventRecord prevRec;   /* restored when an event is cancelled */
+
+/* An event that started just before the AMC rail was switched off is a measurement
+ * artefact (the outputs collapse to 0 V): forget it instead of logging it. */
+static void cancelEvent(void)
+{
+  if (evState == PQ_EV_NONE) return;
+  if (evRec.type == PQ_EV_SAG && sagCount) sagCount--;
+  else if (evRec.type == PQ_EV_SWELL && swellCount) swellCount--;
+  else if (intrCount) intrCount--;
+  evRec = prevRec;
+  evState = PQ_EV_NONE;
+}
+
 static void startEvent(AcqPqEvent type, float v, uint32_t nowMs)
 {
   evState = type;
+  prevRec = evRec;
   memset(&evRec, 0, sizeof(evRec));
   evRec.type = type;
   evRec.start_ms = nowMs;
@@ -145,6 +161,16 @@ void Pq_HalfDone(bool contiguous, uint32_t nowMs)
   }
   hsPrevValid = true;
   if (!ok) return;
+
+  /* AMC rail off (battery, or not fitted): nothing can be measured. */
+  bool railOn = Acquisition_AmcFitted() && (En_3v3_AMC_GPIO_Port->ODR & En_3v3_AMC_Pin) != 0U;
+  if (!railOn) {
+    if (evState != PQ_EV_NONE && nowMs - evRec.start_ms < 200U) cancelEvent();
+    else closeEvent(true);
+    eventsActive = false;
+    hsPrevValid = false;
+    return;
+  }
 
   /* Supply voltage = highest line that Control has ON (NC contact closed) and that was
    * measured VALID in the previous window. With no such line the supply is unknown. */
