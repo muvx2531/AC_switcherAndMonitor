@@ -940,6 +940,10 @@ void StartDefaultTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
+    if (Supervisor_WdtTestActive()) {
+      (void) DebugLog_Printf("WDTTEST: default task stops its heartbeat, expect a watchdog reset in ~3 s\r\n");
+      for (;;) osDelay(1000);
+    }
     Supervisor_Heartbeat();
     if (flashTestRequest == 1U)
     {

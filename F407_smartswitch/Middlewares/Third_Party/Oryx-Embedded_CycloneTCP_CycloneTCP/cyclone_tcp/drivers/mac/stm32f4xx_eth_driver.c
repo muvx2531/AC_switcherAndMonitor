@@ -151,8 +151,15 @@ error_t stm32f4xxEthInit(NetInterface *interface)
    //Perform a software reset
    ETH->DMABMR |= ETH_DMABMR_SR;
    //Wait for the reset to complete
-   while((ETH->DMABMR & ETH_DMABMR_SR) != 0)
+   //SmartSwitch: bounded. The reset needs the PHY's 50 MHz RMII clock; with the PHY
+   //unpowered or broken this never completes and would starve the watchdog task.
    {
+      uint32_t t0 = HAL_GetTick();
+      while((ETH->DMABMR & ETH_DMABMR_SR) != 0)
+      {
+         if((HAL_GetTick() - t0) > 100U)
+            return ERROR_TIMEOUT;
+      }
    }
 
    //Adjust MDC clock range depending on HCLK frequency
@@ -1211,8 +1218,8 @@ void stm32f4xxEthWritePhyReg(uint8_t opcode, uint8_t phyAddr,
 
       //Start a write operation
       ETH->MACMIIAR = temp;
-      //Wait for the write to complete
-      while((ETH->MACMIIAR & ETH_MACMIIAR_MB) != 0)
+      //Wait for the write to complete (SmartSwitch: bounded, normally ~30 us)
+      for(uint32_t n = 0; (ETH->MACMIIAR & ETH_MACMIIAR_MB) != 0 && n < 200000U; n++)
       {
       }
    }
@@ -1251,8 +1258,8 @@ uint16_t stm32f4xxEthReadPhyReg(uint8_t opcode, uint8_t phyAddr,
 
       //Start a read operation
       ETH->MACMIIAR = temp;
-      //Wait for the read to complete
-      while((ETH->MACMIIAR & ETH_MACMIIAR_MB) != 0)
+      //Wait for the read to complete (SmartSwitch: bounded, normally ~30 us)
+      for(uint32_t n = 0; (ETH->MACMIIAR & ETH_MACMIIAR_MB) != 0 && n < 200000U; n++)
       {
       }
 

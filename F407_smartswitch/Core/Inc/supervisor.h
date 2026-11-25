@@ -18,6 +18,13 @@ typedef enum {
 } SupTask;
 
 bool Supervisor_Start(void);
+/* Watchdog test (serial WDTTEST): the default task stops sending heartbeats, so the
+ * Supervisor stops kicking after 2 s and the STWD100 resets the board 1.12 s later
+ * (with jumper DIS_WDT fitted it only logs). Relays keep their state (I1). */
+void Supervisor_WdtTest(void);
+bool Supervisor_WdtTestActive(void);
+/* Longest watchdog kick gap measured during the boot phase, ms. */
+uint32_t Supervisor_BootGapMs(void);
 void Supervisor_BootComplete(void);
 void Supervisor_TaskHeartbeat(SupTask t);
 static inline void Supervisor_Heartbeat(void) { Supervisor_TaskHeartbeat(SUP_TASK_DEFAULT); }

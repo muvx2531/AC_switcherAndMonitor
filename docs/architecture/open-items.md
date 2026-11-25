@@ -13,7 +13,7 @@
 | H4 | **Release time จริงของรีเลย์** (มี 1N4148 คร่อม coil ทำให้หลุดช้ากว่า datasheet) วัด +24Vcoil เทียบหน้าสัมผัสด้วย scope | ใช้ตั้งช่วงยืนยันขา 24 V หาย (S4-2) | — |
 | H5 | glitch บน PB3 ตอนสั่งรีเลย์สลับรัวๆ (ดู `glitch_count`) | ตั้ง filter | — |
 | ~~H6~~ | ✅ **ปิดแล้ว 2026-11-24** จาก net ใน `SitePower.pdf` (MainMCU sheet): ADC_CH0..7 = PC0, PC2, PA0, PA3, PA4, PA5, PB0, PB1 (P/N ของช่อง 1–4), ADC_CH8 = PC3 (VBAT), ADC_CH9 = PA6 (CT), DIAG_S1..4 = PD8/PD10/PD12/PD14. การจับคู่ ADC_CHx ↔ vSense_Pn/Nn บน top sheet อ่านจาก PDF text ไม่ได้ ใช้ตาม HW doc (คู่ติดกัน) ให้ยืนยันอีกครั้งตอนลง AMC3330 | — | — |
-| H7 | วัด margin เวลา boot จริงก่อนถอด jumper DIS_WDT | S4-1 | — |
+| ~~H7~~ | ✅ **ปิดแล้ว 2026-11-25:** ช่องว่างการเตะ WDT ที่นานที่สุด 201 ms ตอนบูต / 200 ms ตอนทำงาน (limit 1120 ms) ถอด jumper แล้วบูต, `WDTTEST` reset จริง, ติดตั้ง FOTA ผ่าน ดู `docs/phase1-foundation.md` | — | — |
 | H8 | knee voltage ของแบต และกำลังไฟใน BACKUP เพื่อคำนวณ X ชั่วโมง | S1-5 | — |
 
 ## รอตัดสินใจ
@@ -39,7 +39,7 @@
 
 ## ความเสี่ยงที่รู้อยู่
 
-- CycloneTCP driver มีจุดรอ reset ของ MAC แบบไม่จำกัดเวลา ต้องใส่ timeout ก่อนเปิด WDT
+- ~~CycloneTCP driver มีจุดรอ reset ของ MAC แบบไม่จำกัดเวลา~~ แก้แล้ว 2026-11-25 (timeout 100 ms)
 - ยังไม่เคยทดสอบการปิด/เปิดไฟ PHY ระหว่างทำงาน (S6-4)
 - ไฟ 24 V ดับสั้นกว่าเวลาที่ firmware เขียน LOW ทัน (~1–2 ms) โหลดจะดับต่อ เป็น known limitation
 - PB3 เป็นขา JTDO/SWO ใช้ SWO trace ไม่ได้ ใช้ SWD ได้ปกติ
