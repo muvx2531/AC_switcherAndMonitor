@@ -32,6 +32,7 @@ typedef enum {
   CTRL_SUBMIT_REJECTED_NO_COIL_SUPPLY,
   CTRL_SUBMIT_REJECTED_STATE_UNKNOWN,
   CTRL_SUBMIT_NOT_READY,
+  CTRL_SUBMIT_REJECTED_LOCAL_CONTROL,   /* button control mode active: web/serial refused (D1) */
 } CtrlSubmitResult;
 
 typedef enum { OUT_PENDING, OUT_APPLIED, OUT_FAILED, OUT_SUPERSEDED, OUT_UNKNOWN, OUT_REJECTED } CtrlOutcomeState;
@@ -56,6 +57,7 @@ typedef struct {
   uint32_t glitch_count;   /* PB3 edges rejected by the confirmation filter */
   uint32_t supply_releases;/* times rule (c) released latches */
   const char *boot_note;   /* result of the pending_restore check at boot */
+  bool local_lock;         /* button control mode active: web/serial commands refused */
 } ControlSnapshot;
 
 /* Start once from task context after I2C init and the PCA9536 boot read. */
@@ -65,6 +67,11 @@ CtrlSubmitResult Control_Submit(const ControlRequest *req, uint32_t *out_request
 /* false if the id is unknown or has dropped out of the outcome history. */
 bool Control_GetOutcome(uint32_t request_id, CtrlOutcome *out);
 void Control_GetSnapshot(ControlSnapshot *out);
+/* Local UI button control mode (decision D1, 2026-11-25: buttons have authority). While
+ * the lock is held, Control_Submit refuses SRC_WEB and SRC_SERIAL requests. The holder
+ * refreshes it at least every few seconds; it expires by itself 15 s after the last
+ * refresh, so a stuck UI never locks out the web for good. */
+void Control_LocalLock(bool on);
 const char *Control_OutcomeName(CtrlOutcomeState state);
 const char *Control_SubmitResultName(CtrlSubmitResult result);
 

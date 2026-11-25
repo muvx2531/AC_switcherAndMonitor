@@ -338,11 +338,28 @@ static void publish(void)
   taskEXIT_CRITICAL();
 }
 
+static volatile bool localLock;
+static volatile TickType_t localLockUntil;
+
+void Control_LocalLock(bool on)
+{
+  taskENTER_CRITICAL();
+  localLock = on;
+  localLockUntil = xTaskGetTickCount() + pdMS_TO_TICKS(15000);
+  taskEXIT_CRITICAL();
+}
+
+static bool localLockActive(void)
+{
+  return localLock && (int32_t)(localLockUntil - xTaskGetTickCount()) > 0;
+}
+
 void Control_GetSnapshot(ControlSnapshot *out)
 {
   taskENTER_CRITICAL();
   *out = published;
   taskEXIT_CRITICAL();
+  out->local_lock = localLockActive();
 }
 
 /* ---- boot ---------------------------------------------------------------- */
@@ -432,6 +449,7 @@ CtrlSubmitResult Control_Submit(const ControlRequest *req, uint32_t *out_request
   if (task == NULL || req == NULL) return CTRL_SUBMIT_NOT_READY;
   if (__get_IPSR() != 0U || req->type > CTRL_CANCEL_CYCLE) return CTRL_SUBMIT_REJECTED_INVALID;
   if (req->channel_mask == 0U || (req->channel_mask & ~CONTROL_ALL_CHANNELS) != 0U) return CTRL_SUBMIT_REJECTED_INVALID;
+  if ((req->source == SRC_WEB || req->source == SRC_SERIAL) && localLockActive()) return CTRL_SUBMIT_REJECTED_LOCAL_CONTROL;
   QueuedRequest q = { .req = *req, .id = 0U };
   if (req->type == CTRL_POWER_CYCLE) {
     if (q.req.duration_s == 0U) q.req.duration_s = CONTROL_DEFAULT_CYCLE_S;
@@ -467,6 +485,7 @@ const char *Control_SubmitResultName(CtrlSubmitResult result)
     case CTRL_SUBMIT_REJECTED_INVALID: return "INVALID";
     case CTRL_SUBMIT_REJECTED_NO_COIL_SUPPLY: return "NO_COIL_SUPPLY";
     case CTRL_SUBMIT_REJECTED_STATE_UNKNOWN: return "STATE_UNKNOWN";
+    case CTRL_SUBMIT_REJECTED_LOCAL_CONTROL: return "LOCAL_CONTROL";
     default: return "NOT_READY";
   }
 }
