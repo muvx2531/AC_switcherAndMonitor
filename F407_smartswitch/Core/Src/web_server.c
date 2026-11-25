@@ -9,6 +9,7 @@
 #include "pca9536.h"
 #include "acquisition.h"
 #include "power.h"
+#include "pq_history.h"
 #include "w25q128.h"
 #include "boot.h"
 #include "supervisor.h"
@@ -18,7 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define JSON_SIZE 3072U
+#define JSON_SIZE 4096U
 #define MAX_TASKS 16U
 
 static HttpServerSettings settings;
@@ -120,7 +121,36 @@ static void buildStatus(void)
       put("%s{\"state\":\"%s\",\"v_x10\":null,\"rms_raw\":%u}", i ? "," : "",
           Acquisition_ValidityName(a.ac_v[i].validity), a.ac_v[i].raw);
   }
-  put("]},");
+  put("],");
+  const AcqPq *q = &a.pq;
+  put("\"pq\":{\"freq_mhz\":");
+  if (q->freq_valid) put("%lu", (unsigned long)q->freq_mhz); else put("null");
+  put(",\"synced\":%s,\"ref_line\":%d,", q->synced ? "true" : "false", (int)q->ref_line);
+  if (q->v_valid) {
+    put("\"v_thd_x10\":%u,\"v_crest_x100\":%u,\"v_h_x10\":[", q->v_thd_x10, q->v_crest_x100);
+    for (unsigned int k = 0; k < ACQ_PQ_HARMONICS - 1U; k++) put("%s%u", k ? "," : "", q->v_h_x10[k]);
+    put("],");
+  } else put("\"v_thd_x10\":null,\"v_crest_x100\":null,\"v_h_x10\":null,");
+  if (q->i_valid) {
+    put("\"i_thd_x10\":%u,\"i_crest_x100\":%u,\"i_h_x10\":[", q->i_thd_x10, q->i_crest_x100);
+    for (unsigned int k = 0; k < ACQ_PQ_HARMONICS - 1U; k++) put("%s%u", k ? "," : "", q->i_h_x10[k]);
+    put("],");
+  } else put("\"i_thd_x10\":null,\"i_crest_x100\":null,\"i_h_x10\":null,");
+  if (q->p_valid) put("\"p_dw\":%ld,\"s_dva\":%ld,\"q_dvar\":%ld,", (long)q->p_dw, (long)q->s_dva, (long)q->q_dvar);
+  else put("\"p_dw\":null,\"s_dva\":null,\"q_dvar\":null,");
+  if (q->pf_valid) put("\"pf_x1000\":%d,\"dpf_x1000\":%d,", q->pf_x1000, q->dpf_x1000);
+  else put("\"pf_x1000\":null,\"dpf_x1000\":null,");
+  put("\"energy_mwh\":%lu,\"ct_reversed\":%s,", (unsigned long)(q->energy_uwh / 1000U), q->ct_reversed ? "true" : "false");
+  put("\"events\":{\"active\":%s,\"supply_min_dv\":%u,\"supply_max_dv\":%u,\"sag\":%lu,\"swell\":%lu,\"interruption\":%lu,",
+      q->events_active ? "true" : "false", q->supply_min_dv, q->supply_max_dv,
+      (unsigned long)q->sag_count, (unsigned long)q->swell_count, (unsigned long)q->interruption_count);
+  if (q->last.type != PQ_EV_NONE)
+    put("\"last\":{\"type\":\"%s\",\"start_ms\":%lu,\"duration_ms\":%lu,\"extreme_dv\":%u,\"active\":%s,\"open_ended\":%s}},",
+        Acquisition_EventName(q->last.type), (unsigned long)q->last.start_ms, (unsigned long)q->last.duration_ms,
+        q->last.extreme_dv, q->last.active ? "true" : "false", q->last.open_ended ? "true" : "false");
+  else put("\"last\":null},");
+  put("\"contact\":[\"%s\",\"%s\",\"%s\",\"%s\"]}},", Acquisition_ContactName(q->contact[0]),
+      Acquisition_ContactName(q->contact[1]), Acquisition_ContactName(q->contact[2]), Acquisition_ContactName(q->contact[3]));
 
   put("\"amc_diag\":[%u,%u,%u,%u],", pin(DIAG_S1_GPIO_Port, DIAG_S1_Pin), pin(DIAG_S2_GPIO_Port, DIAG_S2_Pin),
       pin(DIAG_S3_GPIO_Port, DIAG_S3_Pin), pin(DIAG_S4_GPIO_Port, DIAG_S4_Pin));
@@ -289,6 +319,58 @@ static error_t handleOutcome(HttpConnection *connection)
   return sendJsonStatus(connection, 200, reply);
 }
 
+/* GET /api/waveform: one mains cycle, built in the shared JSON buffer (jsonMutex held). */
+static void buildWaveform(void)
+{
+  static AcqWaveform w;            /* static: too large for the HTTP connection stack */
+  Acquisition_GetWaveform(&w);
+  jsonLen = 0U; jsonOverflow = false;
+  put("{\"seq\":%lu,\"ref_line\":%d,\"fs_mhz\":%lu,\"v_uv_per_count\":%lu,\"i_ua_per_count\":%lu,\"v\":[",
+      (unsigned long)w.seq, (int)w.ref_line, (unsigned long)(w.fs * 1000.0f),
+      (unsigned long)(w.v_per_count * 1e6f), (unsigned long)(w.a_per_count * 1e6f));
+  for (unsigned int k = 0; k < 128U; k++) put("%s%d", k ? "," : "", w.v[k]);
+  put("],\"i\":[");
+  for (unsigned int k = 0; k < 128U; k++) put("%s%d", k ? "," : "", w.i[k]);
+  put("]}");
+}
+
+/* GET /api/history[?n=N]: binary, little endian. 16-byte header
+ * "PQH1", u8 version 1, u8 fields 9, u16 entry size 18, u16 period s, u16 count,
+ * u32 uptime s at the end of the newest entry; then count x HistEntry, oldest first. */
+static error_t sendHistory(HttpConnection *connection)
+{
+  uint32_t total = History_Count(), n = total;
+  const char *q = connection->request.queryString;
+  if (strncmp(q, "n=", 2) == 0) {
+    uint32_t v = 0;
+    for (const char *p = q + 2; *p >= '0' && *p <= '9' && v < 100000U; p++) v = v * 10U + (uint32_t)(*p - '0');
+    if (v < n) n = v;
+  }
+  uint32_t first = total - n;
+  uint8_t hdr[16] = { 'P', 'Q', 'H', '1', 1U, 9U, (uint8_t)sizeof(HistEntry), 0U,
+      (uint8_t)HIST_PERIOD_S, (uint8_t)(HIST_PERIOD_S >> 8), (uint8_t)n, (uint8_t)(n >> 8) };
+  uint32_t endS = History_NewestEndS();
+  memcpy(&hdr[12], &endS, 4);
+  connection->response.statusCode = 200;
+  connection->response.contentType = "application/octet-stream";
+  connection->response.chunkedEncoding = FALSE;
+  connection->response.contentLength = sizeof(hdr) + n * sizeof(HistEntry);
+  connection->response.noCache = TRUE;
+  error_t error = httpWriteHeader(connection);
+  if (!error) error = httpWriteStream(connection, hdr, sizeof(hdr));
+  static HistEntry chunk[32];      /* static: HTTP stack is small; one sender at a time (mutex) */
+  for (uint32_t i = 0; !error && i < n; ) {
+    uint32_t c = 0;
+    while (c < 32U && i < n) {
+      if (!History_Get(first + i, &chunk[c])) memset(&chunk[c], 0x80, sizeof(HistEntry));
+      c++; i++;
+    }
+    error = httpWriteStream(connection, chunk, c * sizeof(HistEntry));
+  }
+  if (!error) error = httpCloseStream(connection);
+  return error;
+}
+
 static error_t requestCallback(HttpConnection *connection, const char_t *uri)
 {
   if (strncmp(uri, "/api/", 5) != 0) return ERROR_NOT_FOUND;  /* static page from res.c */
@@ -300,6 +382,21 @@ static error_t requestCallback(HttpConnection *connection, const char_t *uri)
     buildStatus();
     error_t error = jsonOverflow ? httpSendErrorResponse(connection, 500, "Status too large")
                                  : sendJson(connection, json, jsonLen);
+    xSemaphoreGive(jsonMutex);
+    return error;
+  }
+  if (get && strcmp(uri, "/api/waveform") == 0) {
+    if (xSemaphoreTake(jsonMutex, pdMS_TO_TICKS(1000)) != pdTRUE)
+      return httpSendErrorResponse(connection, 503, "Busy");
+    buildWaveform();
+    error_t error = jsonOverflow ? httpSendErrorResponse(connection, 500, "Too large") : sendJson(connection, json, jsonLen);
+    xSemaphoreGive(jsonMutex);
+    return error;
+  }
+  if (get && strcmp(uri, "/api/history") == 0) {
+    if (xSemaphoreTake(jsonMutex, pdMS_TO_TICKS(1000)) != pdTRUE)
+      return httpSendErrorResponse(connection, 503, "Busy");
+    error_t error = sendHistory(connection);
     xSemaphoreGive(jsonMutex);
     return error;
   }

@@ -1,6 +1,8 @@
 #include "acquisition.h"
 #include "debug_log.h"
 #include "supervisor.h"
+#include "power_quality.h"
+#include "pq_history.h"
 #include "main.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -38,7 +40,7 @@ static volatile uint32_t buf[BUF_WORDS] __attribute__((aligned(4)));
 
 static TaskHandle_t task;
 static StaticTask_t tcb;
-static StackType_t stack[384] __attribute__((section(".ccmram")));
+static StackType_t stack[640] __attribute__((section(".ccmram")));
 
 static volatile uint32_t halvesDone;
 static volatile bool dmaError;
@@ -58,6 +60,10 @@ typedef struct {
 static Window win;
 static AcqSnapshot snap;           /* published copy, guarded by a critical section */
 static TickType_t snapTick[ACQ_AC_CHANNELS + 2U];   /* compute time per signal: ac[0..3], ct, vbat */
+static PqWindowSetup pqNext;       /* power-quality setup for the next window */
+static int16_t wfV[128], wfI[128];  /* last 128 raw samples (ref line P-N, CT), by cycle phase */
+static AcqWaveform wfPub;           /* published, guarded by a critical section */
+static float windowFs = (float)SAMPLE_HZ;
 
 /* ---- hardware ------------------------------------------------------------ */
 
@@ -119,7 +125,8 @@ static void hwStart(void)
   TIM3->CR2 = TIM_CR2_MMS_1;     /* update event -> TRGO */
   TIM3->EGR = TIM_EGR_UG;
   TIM3->SR = 0U;
-  TIM3->CR1 = TIM_CR1_CEN;
+  TIM3->CR1 = TIM_CR1_ARPE | TIM_CR1_CEN;   /* ARR preloaded: frequency tracking changes it glitch-free */
+  windowFs = (float)SAMPLE_HZ;
 }
 
 void DMA2_Stream0_IRQHandler(void)
@@ -136,20 +143,27 @@ void DMA2_Stream0_IRQHandler(void)
 
 /* ---- processing ---------------------------------------------------------- */
 
-static void accumulate(unsigned int half)
+/* base: absolute index (since hwStart) of the first sample of this half. */
+static void accumulate(unsigned int half, uint32_t base, bool contiguous)
 {
   const volatile uint32_t *p = &buf[half * HALF_SAMPLES * RANKS];
   for (unsigned int s = 0; s < HALF_SAMPLES; s++, p += RANKS) {
+    int32_t dv[ACQ_AC_CHANNELS];
     for (unsigned int ch = 0; ch < ACQ_AC_CHANNELS; ch++) {
       uint32_t w = p[ch];
       uint16_t pv = (uint16_t)(w & 0xFFFFU), nv = (uint16_t)(w >> 16);
       int32_t d = (int32_t)pv - (int32_t)nv;
+      dv[ch] = d;
       win.sum[ch] += d;
       win.sumsq[ch] += (uint64_t)((int64_t)d * d);
       if (pv <= ADC_LOW_RAIL || pv >= ADC_HIGH_RAIL || nv <= ADC_LOW_RAIL || nv >= ADC_HIGH_RAIL) win.rail[ch] = true;
     }
     uint32_t w = p[4];
     uint16_t ct = (uint16_t)(w & 0xFFFFU), vb = (uint16_t)(w >> 16);
+    Pq_Sample(dv, (int32_t)ct, base + s);
+    unsigned int ph = (base + s) & 127U;
+    wfV[ph] = (int16_t)(pqNext.ref_line >= 0 ? dv[pqNext.ref_line] : 0);
+    wfI[ph] = (int16_t)ct;
     win.ctSum += ct;
     win.ctSumsq += (uint64_t)ct * ct;
     if (ct <= ADC_LOW_RAIL || ct >= ADC_HIGH_RAIL) win.ctRail = true;
@@ -157,6 +171,7 @@ static void accumulate(unsigned int half)
   }
   win.count += HALF_SAMPLES;
   win.halves++;
+  Pq_HalfDone(contiguous, (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
 }
 
 static float rmsCounts(int64_t sum, uint64_t sumsq, uint32_t n)
@@ -173,7 +188,8 @@ static bool readDiag(unsigned int ch)
   return HAL_GPIO_ReadPin(port[ch], pin[ch]) == GPIO_PIN_SET;
 }
 
-static void finishWindow(void)
+/* nextIdx: absolute index of the first sample of the next window. */
+static void finishWindow(uint32_t nextIdx)
 {
   static TickType_t railOnSince;
   static bool railWasOn;
@@ -216,6 +232,47 @@ static void finishWindow(void)
   s.vbat.validity = (s.vbat.raw <= ADC_LOW_RAIL || s.vbat.raw >= ADC_HIGH_RAIL) ? ACQ_OUT_OF_RANGE : ACQ_VALID;
   snapTick[ACQ_AC_CHANNELS + 1U] = now;
 
+  /* power quality for this window, then the setup of the next one */
+  int32_t lineDv[ACQ_AC_CHANNELS];
+  float lineRms[ACQ_AC_CHANNELS];
+  int ref = -1;
+  for (unsigned int ch = 0; ch < ACQ_AC_CHANNELS; ch++) {
+    lineRms[ch] = rmsCounts(win.sum[ch], win.sumsq[ch], n);
+    lineDv[ch] = s.ac_v[ch].validity == ACQ_VALID ? s.ac_v[ch].value : -1;
+  }
+  int curRef = pqNext.ref_line;
+  {
+    /* waveform of this window's last cycle, DC removed with this window's means */
+    float dcv = curRef >= 0 ? (float)win.sum[curRef] / (float)n : 0.0f, dci = (float)win.ctSum / (float)n;
+    static int16_t v[128], i[128];
+    for (unsigned int k = 0; k < 128U; k++) {
+      v[k] = curRef >= 0 ? (int16_t)lroundf((float)wfV[k] - dcv) : 0;
+      i[k] = (int16_t)lroundf((float)wfI[k] - dci);
+    }
+    taskENTER_CRITICAL();
+    memcpy(wfPub.v, v, sizeof(v));
+    memcpy(wfPub.i, i, sizeof(i));
+    wfPub.ref_line = (int8_t)curRef;
+    wfPub.fs = windowFs;
+    wfPub.v_per_count = VOLT_PER_COUNT * 200.1f;
+    wfPub.a_per_count = CT_MA_PER_COUNT / 1000.0f;
+    wfPub.seq++;
+    taskEXIT_CRITICAL();
+  }
+  Pq_EndWindow(n, windowFs, curRef >= 0 ? lineRms[curRef] : 0.0f, ctRms, s.ct.validity == ACQ_VALID, lineDv, &s.pq);
+  for (unsigned int ch = 0; ch < ACQ_AC_CHANNELS; ch++) {
+    pqNext.line_valid[ch] = lineDv[ch] >= 0;
+    pqNext.dc_v[ch] = (float)win.sum[ch] / (float)n;
+    if (ref < 0 && lineDv[ch] > 500) ref = (int)ch;      /* first VALID line above 50 V */
+  }
+  pqNext.ref_line = ref;
+  pqNext.dc_i = (float)win.ctSum / (float)n;
+  pqNext.start_idx = nextIdx;
+  Pq_BeginWindow(&pqNext);
+  uint32_t arr = Pq_NextArr(TIM3_ARR, 84000000U);
+  TIM3->ARR = arr;                                       /* takes effect at the next update */
+  windowFs = 84000000.0f / (float)(arr + 1U);
+
   s.cal_version = 0U;
   taskENTER_CRITICAL();
   snap.ac_v[0] = s.ac_v[0]; snap.ac_v[1] = s.ac_v[1]; snap.ac_v[2] = s.ac_v[2]; snap.ac_v[3] = s.ac_v[3];
@@ -223,7 +280,9 @@ static void finishWindow(void)
   snap.vbat = s.vbat;
   memcpy(snap.diag, s.diag, sizeof(snap.diag));
   snap.cal_version = s.cal_version;
+  snap.pq = s.pq;
   taskEXIT_CRITICAL();
+  History_AddSecond(&s);
   memset(&win, 0, sizeof(win));
 }
 
@@ -241,7 +300,12 @@ static void acquisitionTask(void *arg)
 {
   (void)arg;
   uint32_t consumed = 0U;
+  bool gap = true;                      /* next half does not follow the previous one */
   TickType_t lastRestart = xTaskGetTickCount();
+  Pq_Init();
+  pqNext.ref_line = -1;
+  pqNext.dc_i = 2048.0f;
+  Pq_BeginWindow(&pqNext);
   hwStart();
   setRunning(true, false, 0U, false);
 
@@ -258,6 +322,9 @@ static void acquisitionTask(void *arg)
       memset(&win, 0, sizeof(win));
       consumed = 0U;
       hwStart();
+      pqNext.start_idx = 0U;
+      Pq_BeginWindow(&pqNext);
+      gap = true;
       setRunning(true, true, 0U, false);
       continue;
     }
@@ -266,10 +333,11 @@ static void acquisitionTask(void *arg)
     if (pending == 0U) continue;
     uint32_t missed = pending - 1U;     /* older halves were already overwritten */
     consumed = done;
-    accumulate((done - 1U) & 1U);       /* HT completes half 0, TC half 1 */
+    accumulate((done - 1U) & 1U, (done - 1U) * HALF_SAMPLES, missed == 0U && !gap);   /* HT: half 0, TC: half 1 */
+    gap = false;
     bool cycleDone = (win.halves % 2U) == 0U;
     setRunning(true, false, missed, cycleDone);
-    if (win.halves >= HALVES_PER_WINDOW) finishWindow();
+    if (win.halves >= HALVES_PER_WINDOW) finishWindow(done * HALF_SAMPLES);
   }
 }
 
@@ -308,6 +376,34 @@ void Acquisition_GetSnapshot(AcqSnapshot *out)
   for (unsigned int ch = 0; ch < ACQ_AC_CHANNELS; ch++) age(&out->ac_v[ch], t[ch], now);
   age(&out->ct, t[ACQ_AC_CHANNELS], now);
   age(&out->vbat, t[ACQ_AC_CHANNELS + 1U], now);
+}
+
+void Acquisition_GetWaveform(AcqWaveform *out)
+{
+  if (out == NULL) return;
+  taskENTER_CRITICAL();
+  *out = wfPub;
+  taskEXIT_CRITICAL();
+}
+
+const char *Acquisition_EventName(AcqPqEvent e)
+{
+  switch (e) {
+    case PQ_EV_SAG: return "SAG";
+    case PQ_EV_SWELL: return "SWELL";
+    case PQ_EV_INTERRUPTION: return "INTERRUPTION";
+    default: return "NONE";
+  }
+}
+
+const char *Acquisition_ContactName(AcqPqContact c)
+{
+  switch (c) {
+    case PQ_CONTACT_OK: return "OK";
+    case PQ_CONTACT_NO_VOLTAGE: return "NO_VOLTAGE";
+    case PQ_CONTACT_STUCK_ON: return "STUCK_ON";
+    default: return "UNKNOWN";
+  }
 }
 
 const char *Acquisition_ValidityName(AcqValidity v)
