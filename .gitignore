@@ -10,3 +10,9 @@
 
 # Shared web password (never commit)
 /F407_smartswitch/Core/Inc/web_secrets.h
+
+# firmware images made by tools/make_ssw.py
+/build/
+# bootloader build outputs
+/Bootloader/Debug/
+/Bootloader/Release/

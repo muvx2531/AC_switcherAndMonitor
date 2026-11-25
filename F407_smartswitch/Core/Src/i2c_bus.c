@@ -124,7 +124,13 @@ static I2cBusResult transfer(uint8_t address, uint8_t reg, uint8_t *value, bool 
       reg, I2C_MEMADD_SIZE_8BIT, &dmaByte, 1) :
       HAL_I2C_Mem_Read_DMA(i2c, (uint16_t)address << 1, reg,
       I2C_MEMADD_SIZE_8BIT, &dmaByte, 1);
-  if (s != HAL_OK) { active = false; lastError = HAL_I2C_GetError(i2c); return I2C_BUS_START_ERROR; }
+  if (s != HAL_OK) {
+    /* HAL refused to start (e.g. BUSY flag stuck after a glitch, handle not READY): the
+     * bus needs a recovery, otherwise every later transfer fails the same way. */
+    taskENTER_CRITICAL(); active = false; faulted = true; taskEXIT_CRITICAL();
+    lastError = HAL_I2C_GetError(i2c);
+    return I2C_BUS_START_ERROR;
+  }
   if (xSemaphoreTake(done, pdMS_TO_TICKS(200)) != pdTRUE) {
     taskENTER_CRITICAL(); active = false; faulted = true; taskEXIT_CRITICAL();
     /* State is uncertain; stop DMA. The next I2cBus_Lock runs a bus recovery. */

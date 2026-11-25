@@ -156,19 +156,21 @@ canvas{width:100%;height:150px;display:block}
   </section>
 
   <section class="view" id="v-firmware" hidden>
-    <div class="banner warn">Draft only. Firmware update needs the bootloader and storage partitions (architecture Phase 5). Nothing on this page works on the current firmware.</div>
     <div class="row r11">
-      <div class="card"><h2>Running</h2><dl class="kv" id="fwrun"></dl></div>
-      <div class="card"><h2>Staging slot (W25Q128 chip 2)</h2><dl class="kv" id="fwslot"></dl></div>
+      <div class="card"><h2>Running firmware</h2><dl class="kv" id="fwrun"></dl></div>
+      <div class="card"><h2>Uploaded image (staging slot)</h2><dl class="kv" id="fwslot"></dl></div>
     </div>
     <div class="card"><h2>Update</h2>
       <div class="steps" id="fwsteps"></div>
-      <div class="btns"><input type="file" id="fwfile" accept=".bin"><button class="pri" id="fwup">Upload</button><button id="fwapply" disabled>Apply and reboot…</button></div>
+      <div class="btns"><input type="file" id="fwfile" accept=".ssw"><button class="pri" id="fwup">Upload</button><button id="fwapply" disabled>Install and reboot…</button><button id="fwroll" disabled>Roll back…</button></div>
       <div class="bar"><i id="fwbar" style="width:0"></i></div>
       <p class="err" id="fwerr"></p>
-      <p class="note">Upload writes the image to the staging slot and verifies it (size, CRC, signature). Apply reboots into the bootloader, which copies the image and keeps a rollback copy. If the new firmware does not confirm itself after boot, the bootloader restores the previous one. Relay states are preserved across the reboot.</p>
+      <p class="note">1) Upload a <b>.ssw</b> file (made by <code>tools/make_ssw.py</code>); the board stores it and checks the header and SHA-256 without touching the running firmware.
+        2) Install: the board reboots, the bootloader keeps a copy of the current firmware and installs the new one (about 10 s, relays keep their state).
+        3) The new firmware confirms itself after 60 s of healthy operation. If it resets 3 times without confirming, the bootloader restores the previous firmware automatically.
+        Roll back restores the previous firmware on request.</p>
     </div>
-    <div class="card"><h2>History</h2><table><thead><tr><th>Time</th><th>From</th><th>To</th><th>Result</th></tr></thead><tbody id="fwhist"></tbody></table></div>
+    <div class="card"><h2>History</h2><table><thead><tr><th>When</th><th>Event</th><th>Version</th></tr></thead><tbody id="fwhist"></tbody></table></div>
   </section>
 </main>
 
@@ -384,26 +386,75 @@ $("napply").onclick = () => {
   });
 };
 
-const FW_STEPS = ["Upload", "Verify", "Ready", "Reboot", "Boot check", "Committed"];
+const FW_STEPS = ["Upload", "Verify", "Ready", "Reboot + install", "Trial run", "Committed"];
+function fwStep(f) {
+  const b = f.boot.state, sl = f.slot.state;
+  if (f.reboot_pending || b === "PENDING" || b === "INSTALLING" || b === "ROLLBACK") return [3, false];
+  if (b === "TRIAL") return [4, false];
+  if (sl === "RECEIVING") return [0, false];
+  if (sl === "INVALID") return [1, true];
+  if (sl === "VALID") return [2, false];
+  if (f.boot.last_result === "COMMITTED") return [6, false];
+  return [0, false];
+}
+const RES_TEXT = { NONE: "—", COMMITTED: "committed", ROLLED_BACK: "rolled back (new firmware did not confirm)", INSTALL_FAILED: "install failed, old firmware kept",
+  RESTORED: "restored previous firmware", REPAIRED: "repaired corrupt firmware" };
 function renderFw(f) {
-  $("fwrun").innerHTML = kv([["Application", esc(f.running.version)], ["Build", esc(f.running.build)], ["Bootloader", esc(f.bootloader)],
-    ["Confirmed", f.running.confirmed ? badge("YES", "ok") : badge("PENDING", "warn")]]);
-  $("fwslot").innerHTML = kv([["State", badge(f.slot.state, f.slot.state === "VALID" ? "ok" : f.slot.state === "INVALID" ? "bad" : "neutral")],
-    ["Version", esc(f.slot.version || "—")], ["Size", f.slot.size ? f.slot.size + " B" : "—"], ["CRC / signature", esc(f.slot.check || "—")]]);
-  $("fwsteps").innerHTML = FW_STEPS.map((s, i) => `<span class="${i < f.step ? "done" : i === f.step ? (f.failed ? "fail" : "cur") : ""}">${s}</span>`).join("");
-  $("fwapply").disabled = !(S.auth && f.slot.state === "VALID");
-  $("fwhist").innerHTML = f.history.map(h => `<tr><td>${esc(h.t)}</td><td>${esc(h.from)}</td><td>${esc(h.to)}</td><td>${badge(h.result, h.result === "COMMITTED" ? "ok" : "bad")}</td></tr>`).join("");
+  S.fw = f;
+  $("fwrun").innerHTML = kv([["Version", esc(f.running.version) + (f.running.dev ? " " + badge("debug build", "warn") : "")], ["Build", esc(f.running.build)],
+    ["State", f.boot.state === "TRIAL" ? badge(`trial ${f.boot.trial_boots}/${f.boot.trial_max} - confirms after 60 s`, "warn") : badge("confirmed", "ok")],
+    ["Last update", f.boot.last_result === "NONE" ? "—" : badge(RES_TEXT[f.boot.last_result] || f.boot.last_result, f.boot.last_result === "COMMITTED" || f.boot.last_result === "RESTORED" ? "ok" : "bad") + " " + esc(f.boot.last_version)],
+    ["Rollback copy", f.backup.present ? `available (${(f.backup.size / 1024).toFixed(0)} KB)` : "none yet"],
+    ["Bootloader", f.bootloader ? badge("present", "ok") : badge("missing - update impossible", "bad")]]);
+  const sl = f.slot;
+  $("fwslot").innerHTML = kv([["State", badge(sl.state === "RECEIVING" ? `receiving ${(sl.received / 1024).toFixed(0)} KB` : sl.state, sl.state === "VALID" ? "ok" : sl.state === "INVALID" ? "bad" : "neutral")],
+    ["Version", esc(sl.version || "—")], ["Build", esc(sl.build || "—")], ["Size", sl.size ? (sl.size / 1024).toFixed(0) + " KB" : "—"],
+    ["Check", sl.state === "VALID" ? badge("header + SHA-256 OK", "ok") : sl.reason ? badge(sl.reason, "bad") : "—"]]);
+  const [step, failed] = fwStep(f);
+  $("fwsteps").innerHTML = FW_STEPS.map((s, i) => `<span class="${i < step ? "done" : i === step ? (failed ? "fail" : "cur") : ""}">${s}</span>`).join("");
+  const idle = !f.reboot_pending && (f.boot.state === "IDLE" || f.boot.state === "TRIAL");
+  $("fwapply").disabled = !(S.auth && sl.state === "VALID" && idle && f.bootloader);
+  $("fwroll").disabled = !(S.auth && f.backup.present && idle && f.bootloader);
+  $("fwup").disabled = !(idle && sl.state !== "RECEIVING");
+}
+async function renderFwHistory() {
+  try {
+    const r = await api("GET", "/api/events?n=40");
+    const rows = r.events.filter(e => e.type === 11);
+    const ver = v => `${v >> 16}.${(v >> 8) & 255}.${v & 255}`;
+    const what = e => e.a === 1 ? "install requested" : e.a === 4 ? "rollback requested" : e.b === 1 ? "committed" : e.b ? (RES_TEXT[["NONE", "COMMITTED", "ROLLED_BACK", "INSTALL_FAILED", "RESTORED", "REPAIRED"][e.b]] || "result " + e.b) : e.a === 3 ? "boot (trial)" : "boot";
+    $("fwhist").innerHTML = rows.map(e => {
+      const ago = e.rtc_s && r.rtc_s >= e.rtc_s ? r.rtc_s - e.rtc_s : null;
+      return `<tr><td>${ago == null ? "—" : esc(new Date(Date.now() - ago * 1000).toLocaleString())}</td><td>${esc(what(e))}</td><td>${esc(ver(e.c))}</td></tr>`;
+    }).join("") || `<tr><td colspan="3">no firmware events yet</td></tr>`;
+  } catch (e) { }
 }
 $("fwfile").onchange = () => $("fwerr").textContent = "";
-$("fwup").onclick = async () => {
+$("fwup").onclick = () => {
+  $("fwerr").textContent = "";
   if (!S.auth) { $("fwerr").textContent = "Sign in first"; return; }
   const file = $("fwfile").files[0];
-  if (!file) { $("fwerr").textContent = "Choose a .bin file first"; return; }
-  if (!file.name.endsWith(".bin")) { $("fwerr").textContent = "File must be a .bin image"; return; }
-  try { await api("POST", "/api/fw/upload", { name: file.name, size: file.size }); } catch (e) { $("fwerr").textContent = "Upload failed: " + e.message; }
+  if (!file) { $("fwerr").textContent = "Choose a .ssw file first"; return; }
+  if (!file.name.toLowerCase().endsWith(".ssw")) { $("fwerr").textContent = "File must be a .ssw image (tools/make_ssw.py)"; return; }
+  if (useMock) { $("fwbar").style.width = "100%"; $("fwerr").textContent = "Mock: upload not simulated"; return; }
+  const x = new XMLHttpRequest();
+  x.open("POST", "/api/fw/upload?token=" + encodeURIComponent(S.csrf));
+  x.setRequestHeader("Content-Type", "application/octet-stream");
+  x.upload.onprogress = e => { if (e.lengthComputable) $("fwbar").style.width = (e.loaded / e.total * 100).toFixed(0) + "%"; };
+  x.onload = () => {
+    let j = {}; try { j = JSON.parse(x.responseText); } catch (e) { }
+    if (x.status === 401) setAuth(false);
+    $("fwerr").textContent = x.status === 200 ? "" : "Upload rejected: " + (j.reason || j.error || x.status);
+    api("GET", "/api/fw/status").then(renderFw).catch(() => {});
+  };
+  x.onerror = () => { $("fwerr").textContent = "Upload failed (connection)"; };
+  $("fwbar").style.width = "0"; $("fwup").disabled = true;
+  x.send(file);
 };
-$("fwapply").onclick = () => openModal("Apply firmware", `<p>The board reboots into the new firmware. Relay states are kept. If it does not confirm itself, the previous firmware is restored.</p>`,
-  "Apply and reboot", true, async pw => { try { await api("POST", "/api/fw/apply", { password: pw }); } catch (e) { return e.status === 403 ? "Wrong password" : e.message; } });
+$("fwapply").onclick = () => openModal("Install firmware " + esc(S.fw && S.fw.slot.version || ""), `<p>The board reboots into the bootloader, which keeps a copy of the current firmware and installs the new one (about 10 s). Relay states are kept. The page reconnects by itself.</p>`,
+  "Install and reboot", true, async pw => { try { await api("POST", "/api/fw/apply", { password: pw }); } catch (e) { return e.status === 403 ? "Wrong password" : (e.body && e.body.reason) || e.message; } });
+$("fwroll").onclick = () => openModal("Roll back firmware", `<p>The board reboots and the bootloader restores the previous firmware (rollback copy). Relay states are kept.</p>`,
+  "Roll back and reboot", true, async pw => { try { await api("POST", "/api/fw/rollback", { password: pw }); } catch (e) { return e.status === 403 ? "Wrong password" : (e.body && e.body.reason) || e.message; } });
 
 const VIEWS = ["status", "quality", "relays", "network", "firmware"];
 let view = "status";
@@ -411,7 +462,7 @@ function show(v) {
   view = VIEWS.includes(v) ? v : "status";
   for (const n of VIEWS) $("v-" + n).hidden = n !== view;
   document.querySelectorAll("nav a").forEach(a => a.classList.toggle("on", a.dataset.v === view));
-  if (view === "firmware") api("GET", "/api/fw/status").then(renderFw).catch(() => {});
+  if (view === "firmware") { api("GET", "/api/fw/status").then(renderFw).catch(() => {}); renderFwHistory(); }
   if (view === "quality" && S.data) { Q.waveAt = 0; refreshQuality(S.data); }
 }
 document.querySelector("nav").onclick = e => {
@@ -421,8 +472,9 @@ document.querySelector("nav").onclick = e => {
 };
 
 const M = { t0: Date.now(), output: 0x02, cycles: [0, 0, 0, 0], outcomes: {}, nextId: 101,
-  fw: { running: { version: "0.5.0", build: "mock-0.5", confirmed: true }, bootloader: "0.1.0",
-        slot: { state: "EMPTY" }, step: -1, failed: false, history: [{ t: "2026-11-20 14:02", from: "0.4.2", to: "0.5.0", result: "COMMITTED" }] } };
+  fw: { running: { version: "0.6.0", build: "mock", dev: false, confirmed: true }, bootloader: true,
+        boot: { state: "IDLE", last_result: "COMMITTED", last_version: "0.6.0", trial_boots: 0, trial_max: 3 },
+        backup: { present: true, size: 214000 }, slot: { state: "EMPTY", version: null, build: null, size: null, received: 0, reason: null }, reboot_pending: false } };
 function mockStatus() {
   const t = Date.now() - M.t0, on24 = Math.floor(t / 20000) % 2 === 0;
   for (let ch = 0; ch < 4; ch++) if (M.cycles[ch] && Date.now() >= M.cycles[ch]) { M.cycles[ch] = 0; M.output &= ~(1 << ch); }
@@ -482,7 +534,7 @@ async function mockApi(method, path, b) {
       if (p >= 100) { clearInterval(iv); M.fw.step = 2; M.fw.slot = { state: "VALID", version: "0.6.0", size: b.size, check: "CRC OK · signature OK" }; } else if (p > 80) M.fw.step = 1; }, 300);
     return {};
   }
-  if (path === "/api/fw/apply") { if (!pwOk(b.password)) fail(403, "bad password"); M.fw.step = 3; return {}; }
+  if (path === "/api/fw/apply" || path === "/api/fw/rollback") { if (!pwOk(b.password)) fail(403, "bad password"); M.fw.reboot_pending = true; return { rebooting: true }; }
   fail(404, "not found");
 }
 
@@ -710,7 +762,7 @@ async function tick() {
   try {
     const d = await Promise.race([api("GET", "/api/status"), new Promise((_, r) => setTimeout(() => r(new Error("timeout")), 2500))]);
     S.data = d; renderStatus(d); renderRelayCtl(); livePoint(d); refreshQuality(d); refreshEvents(d);
-    if (view === "firmware") { try { renderFw(await api("GET", "/api/fw/status")); } catch (e) { } }
+    if (view === "firmware") { try { renderFw(await api("GET", "/api/fw/status")); } catch (e) { } if (Date.now() % 10000 < 1100) renderFwHistory(); }
     failures = 0; document.body.classList.remove("stale"); setConn(useMock ? "Mock data · password: demo" : "Live", useMock ? "warn" : "ok");
   } catch (e) { if (++failures >= 2) { document.body.classList.add("stale"); setConn("Disconnected", "bad"); } }
 }
