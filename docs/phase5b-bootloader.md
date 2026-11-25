@@ -78,11 +78,17 @@ bootloader. Fit the DIS_WDT jumper when flashing with ST-LINK (application secto
 | Auto-rollback | 0.6.2 built to never confirm: trial 1/3, 2/3, 3/3 (manual resets), 4th boot rolled back to 0.6.1 in 4.3 s, result `ROLLED_BACK` |
 | User rollback | `RESTORED` in 3.5 s |
 | Install through FOTA of the no-cache fix | trial → committed |
+| Power cut during backup (24 V pulled, battery removed) | cut 0.2 s into the backup; on power-up state still PENDING → backup redone (5.5 s) → program → trial → committed |
+| Power cut during programming | cut while writing internal flash; on power-up state INSTALLING → program again from staging (3.7 s), SHA-256 OK → trial → committed |
+| Power cut during user rollback | cut while writing from the backup slot; on power-up state ROLLBACK → program again (3.7 s) → `RESTORED` |
 
 Found and fixed during the test: I2C1 stuck in master mode with SCL held low after a failed
 transfer start; `i2c_bus.c` now marks the bus faulted on a start error so the next access runs
 the bus recovery (verified by forcing the fault over SWD: recovered within 1.5 s).
 
-Not tested yet: power cut **during** the bootloader install / backup / rollback, watchdog
+Power cuts were made by hand on a spoken cue from a serial-log watcher; the battery must be
+unplugged first, otherwise the board just switches to battery and the MCU keeps running.
+
+Not tested yet: watchdog
 reset during an install with the DIS_WDT jumper removed, rescue mode, upload interrupted
 (cable pulled), images near the 992 KiB limit.
