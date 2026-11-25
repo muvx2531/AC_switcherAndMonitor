@@ -75,8 +75,15 @@ Board 1 (MAC 02:A2:C0:99:BD:88), DIS_WDT jumper fitted, 24 V present, no AC load
 | JSON size | 1751 B (buffer 3072) |
 | Stack free (words) | acq 290, control 296, defaultTask 284; heap minimum 22.3 KB |
 
-Not tested: CT against a clamp meter with a real AC load (owner at the bench), VBAT against
-a meter on this board, long-duration run, AMC3330 channels.
+**CT with a real AC load, 2026-11-25 (board 2, MAC 02:1D:51:08:57:A2):** SCT-013-010 clamped
+on one conductor, owner's clamp meter **0.56 A** → board **576–579 mA** (DC bias 2046), i.e.
+about +3 % (noise floor 26 mA adds < 1 mA in quadrature). Within the SCT-013 ratio tolerance
+and meter accuracy; one point only, so no calibration factor applied (cal_version 0).
+With the CT unplugged the board reads the noise floor (~26 mA, VALID): the circuit cannot tell
+"CT unplugged" from "no load" (R1002 holds the tip at bias).
+
+Not tested: CT at several load levels (linearity) and near 10 A, VBAT against a meter,
+long-duration run, AMC3330 channels.
 
 The first flash attempt on board 2 failed (`failed to erase memory`) without the DIS_WDT
 jumper: erasing the 128 KB sector 5 takes about 1–2 s and the STWD100 (1.12 s) resets the MCU
