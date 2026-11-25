@@ -282,7 +282,8 @@ function renderStatus(d) {
 function renderRelayCtl() {
   const d = S.data; if (!d) return;
   const avail = !!(d.control && d.control.available);
-  const can = S.auth && avail, coil = d.control ? d.control.coil_supply : false;
+  const lock = !!(d.control && d.control.local_lock);
+  const can = S.auth && avail && !lock, coil = d.control ? d.control.coil_supply : false;
   $("relay-na").hidden = avail;
   $("relay-auth").hidden = S.auth || !avail;
   $("relay-ctl").innerHTML = [0, 1, 2, 3].map(ch => {
@@ -293,7 +294,8 @@ function renderRelayCtl() {
       <button class="danger" data-a="SET_OFF" data-ch="${ch}" ${can && coil ? "" : "disabled"}>Off</button></div>
       <div class="btns"><button class="danger" data-a="POWER_CYCLE" data-ch="${ch}" ${can && coil ? "" : "disabled"}>Power-cycle</button>
       <input type="number" id="dur${ch}" min="1" max="600" value="10" aria-label="Duration in seconds"> s</div></div>`; }).join("") +
-    (d.control && !coil ? `<p class="note" style="grid-column:1/-1">No 24 V coil supply: OFF and power-cycle are rejected (loads are already on).</p>` : "");
+    (d.control && !coil ? `<p class="note" style="grid-column:1/-1">No 24 V coil supply: OFF and power-cycle are rejected (loads are already on).</p>` : "") +
+    (lock ? `<p class="err" style="grid-column:1/-1">Someone is using the buttons on the board (control mode). Web commands are refused until they leave it (10 s after the last button press).</p>` : "");
 }
 
 function renderOutcomes() {

@@ -46,7 +46,7 @@ Implemented in Phase 2: `POST /api/login`, `POST /api/logout {token}`,
 
 | Method / path | Body | Response | Errors |
 |---|---|---|---|
-| `POST /api/relay` | `{type: SET_ON\|SET_OFF\|POWER_CYCLE\|CANCEL_CYCLE, channel_mask, duration_s, password?}` | `{request_id}` | 403 bad password, 409 `{reason: NO_COIL_SUPPLY\|STATE_UNKNOWN}`, 400 `INVALID`, 503 queue busy |
+| `POST /api/relay` | `{type: SET_ON\|SET_OFF\|POWER_CYCLE\|CANCEL_CYCLE, channel_mask, duration_s, password?}` | `{request_id}` | 403 bad password, 409 `{reason: NO_COIL_SUPPLY|STATE_UNKNOWN|LOCAL_CONTROL}` (LOCAL_CONTROL: button control mode active on the board)\|STATE_UNKNOWN}`, 400 `INVALID`, 503 queue busy |
 | `GET /api/relay/outcome?id=` | — | `{state: PENDING\|APPLIED\|FAILED\|SUPERSEDED\|UNKNOWN}` | 404 expired |
 | `POST /api/network` | `{mode: dhcp\|static, ip, mask, gw, dns, password}` | `{}` then the board switches | 403, 400 invalid |
 | `POST /api/network/confirm` | — (sent from the new address) | `{}` | 409 nothing pending |

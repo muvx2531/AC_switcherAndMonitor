@@ -2,8 +2,8 @@
 
 2026-11-25. Firmware 0.7.0, bootloader 1.1.0. Owner request: make the board status readable
 at a glance with the blue LED and the SSD1306 128x32 OLED (P402, I2C1 `0x3C`, no reset line,
-so the panel keeps its picture across an MCU reset). Relay control from the buttons (open
-item D3) is not part of this step.
+so the panel keeps its picture across an MCU reset). Button relay control added in 0.8.0
+(decisions S2-7 to S2-9), see the last section.
 
 ## LED (PC11, one LED, active high)
 
@@ -70,3 +70,27 @@ progress bar) is an identical copy in both projects, like `ssw_image.h`.
 
 Not tested yet: OLED unplugged at boot and while running (retry, relays unaffected), rescue
 screen, LOW_POWER pattern, burn-in over months.
+
+## Button control mode (0.8.0, 2026-11-25)
+
+Owner decisions: D1 buttons have authority over the web **only while control mode is
+active**; D2 the web may switch a relay OFF and leave it off; D3 the UX below.
+
+| Action | Effect |
+|---|---|
+| Short press SW1 or SW2 | wake the display / next status page (unchanged) |
+| Hold SW1 or SW2 for 5 s | "Keep holding 5 s" bar, then CONTROL MODE (only if the OLED works) |
+| SW1 press | select the next item: CH1 -> CH2 -> CH3 -> CH4 -> EXIT -> CH1 (selected channel inverted) |
+| Hold SW2 for 2 s | toggle the selected channel ON <-> OFF (`Control_Submit`, `SRC_LOCAL`), or leave on EXIT; progress bar, one action per press |
+| No press for 10 s | back to the status pages (countdown top right) |
+
+The buttons that entered the mode must be released before they count. Results come from
+Control ("CH2 OFF: done", "Refused: no 24V", ...); OFF is refused without the 24 V coil
+supply (rule (c)). There is no power-cycle from the buttons. While the mode is active
+Control refuses web and serial commands (`LOCAL_CONTROL`, HTTP 409) and the web page shows a
+red note; the lock expires by itself 15 s after the UI stops refreshing it. Button commands
+are in the event log as "from local".
+
+Bench test (board 2, 0.8.0 through FOTA): enter by holding 5 s, selection loops with EXIT,
+CH2 OFF then ON from SW2 (load followed), timeout back to the status pages after 10-11 s, EXIT
+leaves at once, web `SET_ON` during the mode -> 409 `LOCAL_CONTROL`, after leaving -> 200.

@@ -82,11 +82,12 @@ static void buildStatus(void)
   Control_GetSnapshot(&c);
   static const char *const eff[] = {"ON", "OFF", "UNKNOWN"};
   put("\"control\":{\"available\":%s,\"state_known\":%s,\"coil_supply\":%s,\"cycle_remaining_s\":[%u,%u,%u,%u],"
-      "\"effective\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"glitches\":%lu,\"supply_releases\":%lu,\"boot_note\":\"%s\"},",
+      "\"effective\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"glitches\":%lu,\"supply_releases\":%lu,\"boot_note\":\"%s\",\"local_lock\":%s},",
       c.available ? "true" : "false", c.state_known ? "true" : "false", c.coil_supply ? "true" : "false",
       c.cycle_remaining_s[0], c.cycle_remaining_s[1], c.cycle_remaining_s[2], c.cycle_remaining_s[3],
       eff[c.effective[0]], eff[c.effective[1]], eff[c.effective[2]], eff[c.effective[3]],
-      (unsigned long)c.glitch_count, (unsigned long)c.supply_releases, c.boot_note ? c.boot_note : "");
+      (unsigned long)c.glitch_count, (unsigned long)c.supply_releases, c.boot_note ? c.boot_note : "",
+      c.local_lock ? "true" : "false");
 
   PowerSnapshot ps;
   Power_GetSnapshot(&ps);

@@ -1,5 +1,6 @@
 /* Local UI: status LED patterns and OLED status pages (see local_ui.h,
- * docs/local-ui-status.md). Read-only consumer of the other services' snapshots. */
+ * docs/local-ui-status.md). Reads the other services' snapshots; relay commands only from
+ * the button control mode, through Control_Submit (SRC_LOCAL). */
 #include "local_ui.h"
 #include "acquisition.h"
 #include "boot.h"
@@ -294,6 +295,165 @@ static void render(void)
   else drawInfo();
 }
 
+/* ---- buttons and control mode ---------------------------------------------- */
+/* Owner decisions 2026-11-25 (D1-D3): hold SW1 or SW2 for 5 s to enter control mode;
+ * SW1 steps CH1 -> CH4 -> EXIT -> CH1; hold SW2 for 2 s to toggle the selected relay
+ * ON <-> OFF (no power-cycle from the buttons) or to leave on EXIT; 10 s without a press
+ * returns to the status pages. While in control mode web/serial commands are refused. */
+#define ENTER_HOLD_MS    5000U
+#define ACT_HOLD_MS      2000U
+#define HOLD_SHOW_MS     700U       /* show the "keep holding" screen after this */
+#define SHORT_PRESS_MS   700U
+#define CONTROL_IDLE_MS  10000U
+#define MSG_MS           3000U
+#define SEL_EXIT         CONTROL_CHANNELS
+
+typedef struct { bool down, used; uint32_t heldMs; } Button;
+static Button sw1, sw2;
+static bool controlMode, armed;
+static unsigned sel;
+static TickType_t lastAct, msgUntil;
+static char msg[32];
+static uint32_t pendingId;
+static TickType_t pendingSince;
+static unsigned pendingCh;
+static CtrlType pendingType;
+
+static void readButton(Button *b, GPIO_TypeDef *port, uint16_t pin)
+{
+  bool d = HAL_GPIO_ReadPin(port, pin) == GPIO_PIN_RESET;   /* active low, RC debounced */
+  if (d) b->heldMs += TICK_MS; else { b->heldMs = 0; b->used = false; }
+  b->down = d;
+}
+
+static void setMsg(TickType_t now, const char *t)
+{
+  (void)snprintf(msg, sizeof msg, "%s", t);
+  msgUntil = now + pdMS_TO_TICKS(MSG_MS);
+}
+
+static void leaveControl(TickType_t now)
+{
+  controlMode = false;
+  Control_LocalLock(false);
+  page = 0; pageSince = now; lastDraw = 0;
+  (void)DebugLog_Printf("UI: control mode left\r\n");
+}
+
+static void act(TickType_t now)
+{
+  if (sel == SEL_EXIT) { leaveControl(now); return; }
+  Control_GetSnapshot(&ctl);
+  ControlRequest r = { .type = ctl.effective[sel] == EFF_ON ? CTRL_SET_OFF : CTRL_SET_ON,
+                       .channel_mask = (uint8_t)(1U << sel), .duration_s = 0, .source = SRC_LOCAL };
+  uint32_t id = 0;
+  CtrlSubmitResult res = Control_Submit(&r, &id);
+  char t[32];
+  if (res == CTRL_SUBMIT_ACCEPTED) {
+    pendingId = id; pendingSince = now; pendingCh = sel; pendingType = r.type;
+    (void)snprintf(t, sizeof t, "CH%u -> %s ...", sel + 1U, r.type == CTRL_SET_OFF ? "OFF" : "ON");
+  } else if (res == CTRL_SUBMIT_REJECTED_NO_COIL_SUPPLY) (void)snprintf(t, sizeof t, "Refused: no 24V");
+  else if (res == CTRL_SUBMIT_REJECTED_STATE_UNKNOWN) (void)snprintf(t, sizeof t, "Refused: state unknown");
+  else (void)snprintf(t, sizeof t, "Refused: %s", Control_SubmitResultName(res));
+  setMsg(now, t);
+  (void)DebugLog_Printf("UI: button %s CH%u -> %s\r\n", r.type == CTRL_SET_OFF ? "OFF" : "ON", sel + 1U,
+      Control_SubmitResultName(res));
+}
+
+static void pollOutcome(TickType_t now)
+{
+  if (pendingId == 0U) return;
+  CtrlOutcome o;
+  if (!Control_GetOutcome(pendingId, &o)) { pendingId = 0; return; }
+  if (o.state == OUT_PENDING && now - pendingSince < pdMS_TO_TICKS(3000)) return;
+  char t[32];
+  if (o.state == OUT_APPLIED) (void)snprintf(t, sizeof t, "CH%u %s: done", pendingCh + 1U, pendingType == CTRL_SET_OFF ? "OFF" : "ON");
+  else (void)snprintf(t, sizeof t, "CH%u: %s", pendingCh + 1U, o.reason ? o.reason : Control_OutcomeName(o.state));
+  setMsg(now, t);
+  pendingId = 0;
+}
+
+/* Returns a short press (released before SHORT_PRESS_MS, not consumed). */
+static bool buttons(TickType_t now)
+{
+  static bool was1, was2;
+  static uint32_t last1, last2;
+  readButton(&sw1, SW1_GPIO_Port, SW1_Pin);
+  readButton(&sw2, SW2_GPIO_Port, SW2_Pin);
+  bool short1 = was1 && !sw1.down && last1 < SHORT_PRESS_MS && !controlMode;
+  bool short2 = was2 && !sw2.down && last2 < SHORT_PRESS_MS && !controlMode;
+  bool press1 = sw1.down && !was1;
+  was1 = sw1.down; was2 = sw2.down;
+  if (sw1.down) last1 = sw1.heldMs;
+  if (sw2.down) last2 = sw2.heldMs;
+
+  if (!controlMode) {
+    Button *h = sw1.heldMs >= sw2.heldMs ? &sw1 : &sw2;
+    if (h->heldMs >= ENTER_HOLD_MS && !h->used && oledOk) {
+      controlMode = true; armed = false; sel = 0; lastAct = now; msg[0] = 0; msgUntil = now;
+      sw1.used = sw2.used = true;
+      Control_LocalLock(true);
+      (void)DebugLog_Printf("UI: control mode entered (web/serial commands refused)\r\n");
+    }
+    return short1 || short2;
+  }
+
+  Control_LocalLock(true);                                   /* refresh while in the mode */
+  if (!armed) { if (!sw1.down && !sw2.down) armed = true; else return false; }
+  if (sw1.down || sw2.down) lastAct = now;
+  if (press1) { sel = (sel + 1U) % (CONTROL_CHANNELS + 1U); msgUntil = now; }
+  if (sw2.down && !sw2.used && sw2.heldMs >= ACT_HOLD_MS) { sw2.used = true; act(now); }
+  pollOutcome(now);
+  if (controlMode && !sw1.down && !sw2.down && now - lastAct >= pdMS_TO_TICKS(CONTROL_IDLE_MS)) leaveControl(now);
+  return false;
+}
+
+static void drawRelaysSel(unsigned line, int selected)
+{
+  for (unsigned ch = 0; ch < CONTROL_CHANNELS; ch++) {
+    char t[8];
+    const char *st = !ctl.state_known ? "?" : ctl.cycle_remaining_s[ch] ? "CYC" :
+                     ctl.effective[ch] == EFF_ON ? "ON" : ctl.effective[ch] == EFF_OFF ? "OFF" : "?";
+    (void)snprintf(t, sizeof t, "%u:%s", ch + 1U, st);
+    SswOled_Text(fb, ch * 32U + 1U, line, t, (int)ch == selected);
+  }
+}
+
+static void drawHold(void)
+{
+  uint32_t h = sw1.heldMs > sw2.heldMs ? sw1.heldMs : sw2.heldMs;
+  SswOled_Text(fb, 1, 0, "CONTROL MODE", true);
+  SswOled_Text(fb, 0, 1, "Keep holding 5 s", false);
+  SswOled_Bar(fb, 0, 2, 128, h * 1000U / ENTER_HOLD_MS);
+  SswOled_Text(fb, 0, 3, "Release to cancel", false);
+}
+
+static void drawControl(TickType_t now)
+{
+  char t[40];
+  SswOled_Text(fb, 1, 0, "CONTROL MODE", true);
+  uint32_t idle = (uint32_t)((now - lastAct) * portTICK_PERIOD_MS);
+  uint32_t left = idle >= CONTROL_IDLE_MS ? 0U : (CONTROL_IDLE_MS - idle + 999U) / 1000U;
+  (void)snprintf(t, sizeof t, "%2lus", (unsigned long)left);
+  SswOled_Text(fb, SSW_OLED_W - 18U, 0, t, false);
+  drawRelaysSel(1, sel < SEL_EXIT ? (int)sel : -1);
+  bool on = sel < SEL_EXIT && ctl.effective[sel] == EFF_ON;
+  if (sel == SEL_EXIT) SswOled_Text(fb, 0, 2, "> EXIT control mode", true);
+  else {
+    (void)snprintf(t, sizeof t, "CH%u is %s%s", sel + 1U, on ? "ON" : ctl.effective[sel] == EFF_OFF ? "OFF" : "?",
+        ctl.cycle_remaining_s[sel] ? " (cycling)" : "");
+    SswOled_Text(fb, 0, 2, t, false);
+  }
+  const char *verb = sel == SEL_EXIT ? "exit" : on ? "OFF" : "ON";
+  if (armed && sw2.down && !sw2.used) {
+    (void)snprintf(t, sizeof t, "%s", verb);
+    SswOled_Text(fb, 0, 3, t, false);
+    SswOled_Bar(fb, 30, 3, 98, sw2.heldMs * 1000U / ACT_HOLD_MS);
+  } else if ((int32_t)(msgUntil - now) > 0 && msg[0]) SswOled_Text(fb, 0, 3, msg, false);
+  else if (sel < SEL_EXIT && on && !ctl.coil_supply) SswOled_Text(fb, 0, 3, "OFF needs 24V", false);
+  else { (void)snprintf(t, sizeof t, "SW1:next SW2 2s:%s", verb); SswOled_Text(fb, 0, 3, t, false); }
+}
+
 static void oledService(TickType_t now, bool input)
 {
   if (!oledOk) {
@@ -303,34 +463,34 @@ static void oledService(TickType_t now, bool input)
     if (oledLogged) (void)DebugLog_Printf("UI: OLED ready\r\n");
     oledLogged = false;
   }
+  bool holding = !controlMode && (sw1.heldMs >= HOLD_SHOW_MS || sw2.heldMs >= HOLD_SHOW_MS) && !sw1.used && !sw2.used;
   /* brightness: dim after 5 min without a button press, unless something needs attention */
-  bool attention = level == LV_FAULT || level == LV_WARN || level == LV_UPDATE || level == LV_LOWPWR;
+  bool attention = controlMode || holding || level == LV_FAULT || level == LV_WARN || level == LV_UPDATE || level == LV_LOWPWR;
   bool wantDim = !attention && (now - lastInput) >= pdMS_TO_TICKS(DIM_AFTER_MS);
   if (wantDim != dim) {
     if (!SswOled_Contrast(oledWrite, wantDim ? CONTRAST_DIM : CONTRAST_FULL)) { oledFailed(); return; }
     dim = wantDim;
   }
-  bool turn = (now - pageSince) >= pdMS_TO_TICKS(PAGE_MS);
-  if (input && !wantDim) turn = true;                     /* SW press steps to the next page */
+  bool live = controlMode || holding || level == LV_UPDATE;
+  bool turn = !live && (now - pageSince) >= pdMS_TO_TICKS(PAGE_MS);
+  if (input && !wantDim && !live) turn = true;              /* short press steps to the next page */
   if (turn) { page = (page + 1U) % pageCount(); pageSince = now; }
-  if (turn || input || level == LV_UPDATE || (now - lastDraw) >= pdMS_TO_TICKS(REDRAW_MS)) {
-    render();
-    if (!SswOled_Flush(oledWrite, fb, 0, SSW_OLED_PAGES - 1U)) { oledFailed(); return; }
+  if (live || turn || input || (now - lastDraw) >= pdMS_TO_TICKS(REDRAW_MS)) {
+    SswOled_Clear(fb);
+    if (level == LV_UPDATE) drawUpdate();
+    else if (controlMode) drawControl(now);
+    else if (holding) drawHold();
+    else render();
+    if (!SswOled_Flush(oledWrite, fb, 0, SSW_OLED_PAGES - 1U)) {
+      oledFailed();
+      if (controlMode) leaveControl(now);                    /* no blind control without a display */
+      return;
+    }
     lastDraw = now;
   }
 }
 
 /* ---- task ----------------------------------------------------------------- */
-static bool buttonPressed(void)
-{
-  static bool was;
-  bool now = HAL_GPIO_ReadPin(SW1_GPIO_Port, SW1_Pin) == GPIO_PIN_RESET ||
-             HAL_GPIO_ReadPin(SW2_GPIO_Port, SW2_Pin) == GPIO_PIN_RESET;   /* active low */
-  bool edge = now && !was;
-  was = now;
-  return edge;
-}
-
 static void uiTask(void *arg)
 {
   (void)arg;
@@ -347,10 +507,11 @@ static void uiTask(void *arg)
   evaluate();
   for (;;) {
     TickType_t now = xTaskGetTickCount();
-    bool input = buttonPressed();
     bool wasDim = dim;
-    if (input) lastInput = now;
+    bool input = buttons(now);
+    if (input || sw1.down || sw2.down) lastInput = now;
     if (input && wasDim) input = false;                     /* first press only wakes */
+    if (controlMode) Control_GetSnapshot(&ctl);
     if (now - lastEval >= pdMS_TO_TICKS(500) || fw.reboot_pending) { evaluate(); lastEval = now; }
 
     uint32_t bits; unsigned len;
