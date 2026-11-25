@@ -82,6 +82,28 @@ and meter accuracy; one point only, so no calibration factor applied (cal_versio
 With the CT unplugged the board reads the noise floor (~26 mA, VALID): the circuit cannot tell
 "CT unplugged" from "no load" (R1002 holds the tip at bias).
 
+## AMC3330 fitted, 2026-11-25 (board 2, MAC 02:1D:51:08:57:A2)
+
+Branch `feature/amc-fitted`: `ACQ_AMC_FITTED 1` and, **temporarily until the Power service
+(Phase 4) owns the rails**, `Acquisition_Start` drives PC10 (+3.3V_AMC) high. `/api/status`
+`acq.ac[]` now also carries `rms_raw` (RMS of P − N in counts) for diagnostics.
+
+| Test | Result |
+|---|---|
+| AMC outputs, no AC | OUTP/OUTN 1.434–1.461 V (AMC3330 common mode ≈ 1.44 V), offset 0–10 counts, DIAG 1 on all four |
+| Noise floor, no AC | 1.3–4.5 V rms equivalent (HV inputs floating) |
+| 230 V AC applied, all relays at latch 0 (NC closed) | 229.5–229.8 V on all four lines, spread ≤ 0.3 V, steady ±0.1 V |
+| Owner's meter | **229.30 V** → board +0.4 V (+0.17 %) with the nominal ×200.1 scale; no calibration needed |
+| Headroom | at 230 V the AMC input peak is ≈ 0.81 V of its ±1 V linear range → about 280 V rms before clipping |
+
+**Warning:** a board **without** AMC3330 must not run the `ACQ_AMC_FITTED 1` build: with the
+rail on, DIAG is pulled HIGH by R201 and the floating inputs would show plausible-looking
+VALID voltages. Board 1 (MAC 02:A2:C0:99:BD:88) has no AMC3330 as of 2026-11-25.
+Long term this becomes a stored per-board setting (Storage phase), not a build option.
+
+Not tested yet with AMC: line voltage while a relay is OFF (needs the owner's OK to energize
+a coil), contact feedback into Control, DIAG fault injection.
+
 Not tested: CT at several load levels (linearity) and near 10 A, VBAT against a meter,
 long-duration run, AMC3330 channels.
 
