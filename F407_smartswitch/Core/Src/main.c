@@ -35,6 +35,7 @@
 #include "acquisition.h"
 #include "power.h"
 #include "storage.h"
+#include "remote_link.h"
 #include "ssw_image.h"
 #include "fota.h"
 #include "local_ui.h"
@@ -930,8 +931,12 @@ void StartDefaultTask(void *argument)
   }
   if (!protocolReady)
     (void) DebugLog_Printf("protocol: USART6 callback registration or RX DMA start failed\r\n");
-  if (!Boot_SafeMode())
+  if (!Boot_SafeMode()) {
     (void) EthProbe_Start();
+    /* Remote link to the cabinet RPi (docs/remote-link-protocol.md). */
+    if (!RemoteLink_Start())
+      (void) DebugLog_Printf("REMOTE: start failed\r\n");
+  }
   /* Power owns the ETH/AMC rails from here on (started after EthProbe_Start). */
   if (!Power_Start())
     (void) DebugLog_Printf("PWR: start failed\r\n");

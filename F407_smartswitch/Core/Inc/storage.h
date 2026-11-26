@@ -33,6 +33,8 @@ typedef enum {
   ST_EV_CONFIG,          /* a: config sequence */
   ST_EV_FORMAT,          /* storage formatted */
   ST_EV_FIRMWARE,        /* a: boot state (SswBootState), b: result (SswResult), c: version */
+  ST_EV_REMOTE_CMD,      /* a: request id, b/c: first 8 bytes of the actor (remote link) */
+  ST_EV_REMOTE_LINK,     /* a: 1 connected, 0 disconnected, b: peer IPv4 (network order) */
 } StEventType;
 
 typedef struct {
@@ -43,11 +45,30 @@ typedef struct {
   int32_t a, b, c, d;
 } StEvent;
 
+#define ST_REMOTE_KEY_MAX 64U
+
+/* Remote link to the cabinet RPi (docs/remote-link-protocol.md). */
+typedef struct {
+  uint8_t enabled;       /* 0/1 */
+  uint8_t ip_first;      /* last octet of the scan range, same subnet as the board */
+  uint8_t ip_last;
+  uint8_t min_gap_s;     /* per channel, between REMOTE state changes */
+  uint8_t max_per_min;   /* REMOTE relay commands per minute */
+  uint8_t interval_s;    /* status period */
+  uint16_t port;
+  uint32_t fixed_ip;     /* network order; 0 = scan the range */
+  char key[ST_REMOTE_KEY_MAX + 1];   /* shared key, "" = not set (link stays off) */
+} StRemoteConfig;
+
 typedef struct {
   uint32_t seq;          /* config generation, set by Storage */
   uint8_t amc_fitted;    /* 0xFF = follow build default (ACQ_AMC_FITTED) */
   int16_t ct_phase_cdeg; /* CT phase lead, 0.01 degree */
+  StRemoteConfig remote;
 } StConfig;
+
+/* Defaults for a board whose config predates the remote link. */
+void Storage_RemoteDefaults(StRemoteConfig *r);
 
 typedef enum {
   ST_STATE_INIT = 0,
@@ -85,6 +106,10 @@ const char *Storage_StateName(StState s);
 
 /* Readers (web, task context). Newest first, up to max; returns the count. */
 uint32_t Storage_ReadEvents(StEvent *out, uint32_t max);
+/* Same, starting below before_seq (UINT32_MAX = newest). */
+uint32_t Storage_ReadEventsBefore(uint32_t before_seq, StEvent *out, uint32_t max);
+/* Sequence number of the newest event written to flash (0 = none). */
+uint32_t Storage_LastEventSeq(void);
 /* Iterate history records with rtc_s >= from_rtc_s, oldest first. */
 typedef void (*StHistoryFn)(uint32_t rtc_s, const HistEntry *e, void *ctx);
 uint32_t Storage_ReadHistory(uint32_t from_rtc_s, StHistoryFn fn, void *ctx);

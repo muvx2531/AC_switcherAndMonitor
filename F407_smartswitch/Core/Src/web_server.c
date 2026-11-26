@@ -19,12 +19,13 @@
 #include "supervisor.h"
 #include "control.h"
 #include "web_auth.h"
+#include "remote_link.h"
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
-#define JSON_SIZE 4096U
+#define JSON_SIZE 6144U
 #define MAX_TASKS 16U
 
 static HttpServerSettings settings;
@@ -34,7 +35,7 @@ static HttpConnection connections[HTTP_SERVER_MAX_CONNECTIONS];
 /* One JSON builder shared by both HTTP connection tasks, guarded by a mutex. */
 static SemaphoreHandle_t jsonMutex;
 static StaticSemaphore_t jsonMutexStorage;
-static char json[JSON_SIZE];
+static char json[JSON_SIZE] __attribute__((section(".ccmbss")));   /* CPU only, copied into TCP buffers */
 static size_t jsonLen;
 static bool jsonOverflow;
 static TaskStatus_t taskStatus[MAX_TASKS];
@@ -178,6 +179,23 @@ static void buildStatus(void)
       (unsigned long)(st.energy_uwh_saved / 1000U), (unsigned long)st.dropped, (unsigned long)st.write_errors,
       (unsigned long)sc.seq, sc.amc_fitted == 0xFFU ? -1 : (int)sc.amc_fitted, (int)sc.ct_phase_cdeg,
       Acquisition_AmcFitted() ? "true" : "false", (unsigned long)Boot_RtcSeconds(), Boot_RtcKept() ? "true" : "false");
+
+  RemoteStatus rs;
+  RemoteLink_GetStatus(&rs);
+  const StRemoteConfig *rc = &sc.remote;
+  put("\"remote\":{\"enabled\":%s,\"key_set\":%s,\"state\":\"%s\",\"peer\":\"%u.%u.%u.%u\",\"connected_s\":%lu,"
+      "\"connects\":%lu,\"auth_failures\":%lu,\"sweeps\":%lu,\"commands\":%lu,\"rejected\":%lu,"
+      "\"ip_first\":%u,\"ip_last\":%u,\"port\":%u,\"fixed_ip\":\"%u.%u.%u.%u\",\"interval_s\":%u,"
+      "\"min_gap_s\":%u,\"max_per_min\":%u},",
+      rc->enabled ? "true" : "false", rc->key[0] ? "true" : "false", RemoteLink_StateName(rs.state),
+      (unsigned)(rs.peer_ip & 255U), (unsigned)((rs.peer_ip >> 8) & 255U), (unsigned)((rs.peer_ip >> 16) & 255U),
+      (unsigned)(rs.peer_ip >> 24), (unsigned long)rs.connected_s, (unsigned long)rs.connects,
+      (unsigned long)rs.auth_failures, (unsigned long)rs.sweeps, (unsigned long)rs.commands, (unsigned long)rs.rejected,
+      rc->ip_first, rc->ip_last, rc->port, (unsigned)(rc->fixed_ip & 255U), (unsigned)((rc->fixed_ip >> 8) & 255U),
+      (unsigned)((rc->fixed_ip >> 16) & 255U), (unsigned)(rc->fixed_ip >> 24), rc->interval_s, rc->min_gap_s,
+      rc->max_per_min);
+  if (Boot_TimeValid()) put("\"time\":{\"valid\":true,\"unix\":%lu},", (unsigned long)Boot_UnixNow());
+  else put("\"time\":{\"valid\":false,\"unix\":null},");
 
   DebugLogStats ls = {0};
   (void)DebugLog_GetStats(&ls);
@@ -583,6 +601,61 @@ static error_t handleFwAction(HttpConnection *connection, const char *body, bool
   return sendJsonStatus(connection, 409, reply);
 }
 
+/* POST /api/remote {token, password, enabled, ip_first, ip_last, port, fixed_ip, interval_s,
+ * min_gap_s, max_per_min, key?, clear_key?}: remote link settings (docs/remote-link-protocol.md).
+ * key omitted or "" keeps the current key; the key is never sent back. */
+static error_t handleRemote(HttpConnection *connection, const char *body)
+{
+  char pw[32], ip[20], key[ST_REMOTE_KEY_MAX + 2];
+  if (!jsonString(body, "password", pw, sizeof(pw))) return sendJsonStatus(connection, 403, "{\"error\":\"password required\"}");
+  WebAuthResult a = WebAuth_CheckPassword(pw);
+  if (a == AUTH_LOCKED) return sendJsonStatus(connection, 429, "{\"error\":\"too many attempts\"}");
+  if (a != AUTH_OK) return sendJsonStatus(connection, 403, "{\"error\":\"bad password\"}");
+  static StConfig c;               /* static: HTTP stack is small; one writer at a time (mutex) */
+  Storage_GetConfig(&c);
+  StRemoteConfig *r = &c.remote;
+  uint32_t en = 0, first = 0, last = 0, port = 0, iv = 0, gap = 0, maxm = 0, clr = 0;
+  if (!jsonUint(body, "enabled", &en) || !jsonUint(body, "ip_first", &first) || !jsonUint(body, "ip_last", &last) ||
+      !jsonUint(body, "port", &port) || !jsonUint(body, "interval_s", &iv) || !jsonUint(body, "min_gap_s", &gap) ||
+      !jsonUint(body, "max_per_min", &maxm))
+    return sendJsonStatus(connection, 400, "{\"error\":\"missing field\"}");
+  if (en > 1U || first < 1U || first > 254U || last < first || last > 254U || port < 1U || port > 65535U ||
+      iv < 1U || iv > 60U || gap > 255U || maxm < 1U || maxm > 60U)
+    return sendJsonStatus(connection, 400, "{\"error\":\"value out of range\"}");
+  Ipv4Addr fixed = IPV4_UNSPECIFIED_ADDR;
+  if (jsonString(body, "fixed_ip", ip, sizeof(ip)) && ip[0] != '\0' && strcmp(ip, "0.0.0.0") != 0 &&
+      ipv4StringToAddr(ip, &fixed) != NO_ERROR)
+    return sendJsonStatus(connection, 400, "{\"error\":\"bad fixed IP\"}");
+  if (jsonString(body, "key", key, sizeof(key)) && key[0] != '\0') {
+    size_t n = strlen(key);
+    if (n < 16U || n > ST_REMOTE_KEY_MAX) return sendJsonStatus(connection, 400, "{\"error\":\"key must be 16-64 characters\"}");
+    for (size_t i = 0; i < n; i++)
+      if (key[i] < 0x21 || key[i] > 0x7E) return sendJsonStatus(connection, 400, "{\"error\":\"key: printable ASCII, no spaces\"}");
+    memset(r->key, 0, sizeof(r->key));
+    memcpy(r->key, key, n);
+  } else if (jsonUint(body, "clear_key", &clr) && clr == 1U) {
+    memset(r->key, 0, sizeof(r->key));
+  }
+  r->enabled = (uint8_t)en; r->ip_first = (uint8_t)first; r->ip_last = (uint8_t)last; r->port = (uint16_t)port;
+  r->interval_s = (uint8_t)iv; r->min_gap_s = (uint8_t)gap; r->max_per_min = (uint8_t)maxm; r->fixed_ip = fixed;
+  memset(key, 0, sizeof(key)); memset(pw, 0, sizeof(pw));
+  if (!Storage_SetConfig(&c)) return sendJsonStatus(connection, 503, "{\"error\":\"storage not ready\"}");
+  Storage_LogEvent(ST_EV_CONFIG, (int32_t)c.amc_fitted, (int32_t)c.ct_phase_cdeg, 1, 0);
+  return sendJsonStatus(connection, 200, "{}");
+}
+
+bool WebServer_WithJson(WebJsonKind kind, WebJsonSink sink, void *ctx)
+{
+  if (jsonMutex == NULL || xSemaphoreTake(jsonMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return false;
+  if (kind == WEB_JSON_STATUS) buildStatus();
+  else if (kind == WEB_JSON_WAVEFORM) buildWaveform();
+  else buildFwStatus();
+  bool ok = !jsonOverflow;
+  if (ok) sink(json, jsonLen, ctx);
+  xSemaphoreGive(jsonMutex);
+  return ok;
+}
+
 static error_t requestCallback(HttpConnection *connection, const char_t *uri)
 {
   if (strncmp(uri, "/api/", 5) != 0) {
@@ -637,8 +710,8 @@ static error_t requestCallback(HttpConnection *connection, const char_t *uri)
   if (get && strcmp(uri, "/api/relay/outcome") == 0) return handleOutcome(connection);
   if (post && (strcmp(uri, "/api/login") == 0 || strcmp(uri, "/api/logout") == 0 || strcmp(uri, "/api/relay") == 0 ||
                strcmp(uri, "/api/fw/apply") == 0 || strcmp(uri, "/api/fw/rollback") == 0 ||
-               strcmp(uri, "/api/session") == 0)) {
-    char body[256];
+               strcmp(uri, "/api/session") == 0 || strcmp(uri, "/api/remote") == 0)) {
+    char body[400];
     if (!readBody(connection, body, sizeof(body))) return sendJsonStatus(connection, 400, "{\"error\":\"bad body\"}");
     if (strcmp(uri, "/api/login") == 0) return handleLogin(connection, body);
     /* Session token in the body: a cross-site form cannot read or forge it (CSRF). */
@@ -649,6 +722,7 @@ static error_t requestCallback(HttpConnection *connection, const char_t *uri)
     if (strcmp(uri, "/api/session") == 0) return sendJsonStatus(connection, 200, "{}");   /* token still valid */
     if (strcmp(uri, "/api/fw/apply") == 0) return handleFwAction(connection, body, false);
     if (strcmp(uri, "/api/fw/rollback") == 0) return handleFwAction(connection, body, true);
+    if (strcmp(uri, "/api/remote") == 0) return handleRemote(connection, body);
     return handleRelay(connection, body);
   }
   /* Network settings and firmware update come in later phases. */

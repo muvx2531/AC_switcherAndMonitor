@@ -16,7 +16,8 @@
 #define CONTROL_MAX_CYCLE_S 600U
 
 typedef enum { CTRL_SET_ON, CTRL_SET_OFF, CTRL_POWER_CYCLE, CTRL_CANCEL_CYCLE } CtrlType;
-typedef enum { SRC_WEB, SRC_SERIAL, SRC_LOCAL, SRC_SYSTEM } CtrlSource;
+/* Values are stored in the event log (ST_EV_RELAY): append only. */
+typedef enum { SRC_WEB, SRC_SERIAL, SRC_LOCAL, SRC_SYSTEM, SRC_REMOTE } CtrlSource;
 
 typedef struct {
   CtrlType type;
@@ -68,7 +69,7 @@ CtrlSubmitResult Control_Submit(const ControlRequest *req, uint32_t *out_request
 bool Control_GetOutcome(uint32_t request_id, CtrlOutcome *out);
 void Control_GetSnapshot(ControlSnapshot *out);
 /* Local UI button control mode (decision D1, 2026-11-25: buttons have authority). While
- * the lock is held, Control_Submit refuses SRC_WEB and SRC_SERIAL requests. The holder
+ * the lock is held, Control_Submit refuses SRC_WEB, SRC_SERIAL and SRC_REMOTE requests. The holder
  * refreshes it at least every few seconds; it expires by itself 15 s after the last
  * refresh, so a stuck UI never locks out the web for good. */
 void Control_LocalLock(bool on);

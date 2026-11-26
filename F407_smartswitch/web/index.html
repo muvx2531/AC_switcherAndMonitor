@@ -154,6 +154,30 @@ canvas{width:100%;height:150px;display:block}
         <p class="note">Safe apply: the board switches to the new settings and keeps the old ones for 120 s. Open the new address and press Confirm there; otherwise it reverts automatically. Fallback access: serial console.</p>
       </div>
     </div>
+    <div class="row r11" id="rmcard" hidden style="margin-top:12px">
+      <div class="card"><h2>Remote link (cabinet RPi)</h2><dl class="kv" id="rmst"></dl>
+        <p class="note">The board connects to the RPi on the cabinet LAN (TCP, scans the range below) and streams status and events; the RPi can switch relays. Protocol: docs/remote-link-protocol.md.</p></div>
+      <div class="card"><h2>Remote link settings</h2>
+        <label class="f"><span><input type="checkbox" id="rmen"> Enabled</span></label>
+        <div class="row r11">
+          <label class="f">Scan from .<input id="rmfirst" inputmode="numeric"></label>
+          <label class="f">to .<input id="rmlast" inputmode="numeric"></label>
+        </div>
+        <div class="row r11">
+          <label class="f">Port<input id="rmport" inputmode="numeric"></label>
+          <label class="f">Fixed RPi IP (optional)<input id="rmfixed" placeholder="empty = scan"></label>
+        </div>
+        <div class="row r11">
+          <label class="f">Status every (s)<input id="rmint" inputmode="numeric"></label>
+          <label class="f">Relay gap per channel (s)<input id="rmgap" inputmode="numeric"></label>
+        </div>
+        <label class="f">Relay commands per minute<input id="rmmax" inputmode="numeric"></label>
+        <label class="f">Shared key (16–64 characters, same as on the RPi)<input type="password" id="rmkey" autocomplete="new-password" placeholder="leave empty to keep the current key"></label>
+        <label class="f"><span><input type="checkbox" id="rmclr"> Clear the key (link stays off)</span></label>
+        <p class="err" id="rmerr"></p>
+        <div class="btns"><button class="pri" id="rmsave">Save…</button><span class="sub" id="rmstate"></span></div>
+      </div>
+    </div>
   </section>
 
   <section class="view" id="v-firmware" hidden>
@@ -473,6 +497,53 @@ $("fwapply").onclick = () => openModal("Install firmware " + esc(S.fw && S.fw.sl
 $("fwroll").onclick = () => openModal("Roll back firmware", `<p>The board reboots and the bootloader restores the previous firmware (rollback copy). Relay states are kept.</p>`,
   "Roll back and reboot", true, async pw => { try { await api("POST", "/api/fw/rollback", { password: pw }); } catch (e) { return e.status === 403 ? "Wrong password" : (e.body && e.body.reason) || e.message; } });
 
+/* Remote link (docs/remote-link-protocol.md) */
+const RM = { filled: false };
+const ipStr = s => s && s !== "0.0.0.0" ? s : "";
+function renderRemote(d) {
+  const r = d.remote;
+  $("rmcard").hidden = !r;
+  if (!r) return;
+  const live = r.state === "CONNECTED" || r.state === "HANDSHAKE";
+  const cls = r.state === "CONNECTED" ? "ok" : (r.state === "DISABLED" ? "neutral" : "warn");
+  $("rmst").innerHTML = kv([
+    ["State", badge(r.state, cls)],
+    ["RPi", live ? esc(r.peer + ":" + r.port) : (ipStr(r.peer) ? "last seen " + esc(r.peer) : "—")],
+    ["Connected for", r.state === "CONNECTED" ? r.connected_s + " s" : "—"],
+    ["Shared key", r.key_set ? "set" : badge("not set", "warn")],
+    ["Relay commands", `${r.commands} accepted · ${r.rejected} refused`],
+    ["Connections", `${r.connects} · handshake failures ${r.auth_failures} · sweeps without RPi ${r.sweeps}`],
+    ["Board clock", d.time && d.time.valid ? esc(new Date(d.time.unix * 1000).toLocaleString()) : "not set (the RPi sets it)"]]);
+  if (!RM.filled) {
+    $("rmen").checked = r.enabled; $("rmfirst").value = r.ip_first; $("rmlast").value = r.ip_last; $("rmport").value = r.port;
+    $("rmfixed").value = ipStr(r.fixed_ip); $("rmint").value = r.interval_s; $("rmgap").value = r.min_gap_s; $("rmmax").value = r.max_per_min;
+    RM.filled = true;
+  }
+}
+["rmfirst", "rmlast", "rmport", "rmfixed", "rmint", "rmgap", "rmmax", "rmkey"].forEach(id => $(id).oninput = () => $("rmerr").textContent = "");
+$("rmsave").onclick = () => {
+  const err = t => { $("rmerr").textContent = t; };
+  if (!S.auth) return err("Sign in first");
+  const n = id => { const v = $(id).value.trim(); return /^\d+$/.test(v) ? +v : NaN; };
+  const b = { enabled: $("rmen").checked ? 1 : 0, ip_first: n("rmfirst"), ip_last: n("rmlast"), port: n("rmport"),
+              fixed_ip: $("rmfixed").value.trim(), interval_s: n("rmint"), min_gap_s: n("rmgap"), max_per_min: n("rmmax") };
+  if (!(b.ip_first >= 1 && b.ip_first <= 254 && b.ip_last >= b.ip_first && b.ip_last <= 254)) return err("Scan range: 1–254, 'to' not below 'from'");
+  if (!(b.port >= 1 && b.port <= 65535)) return err("Port: 1–65535");
+  if (b.fixed_ip && !ipOk(b.fixed_ip)) return err("Fixed RPi IP is not a valid IPv4 address");
+  if (!(b.interval_s >= 1 && b.interval_s <= 60)) return err("Status period: 1–60 s");
+  if (!(b.min_gap_s >= 0 && b.min_gap_s <= 255)) return err("Relay gap: 0–255 s");
+  if (!(b.max_per_min >= 1 && b.max_per_min <= 60)) return err("Commands per minute: 1–60");
+  const key = $("rmkey").value;
+  if (key) {
+    if (key.length < 16 || key.length > 64 || /[^\x21-\x7e]/.test(key)) return err("Key: 16–64 printable characters, no spaces");
+    b.key = key;
+  } else if ($("rmclr").checked) b.clear_key = 1;
+  openModal("Save remote link settings", `<p>The board drops the current RPi connection (if any) and scans again with the new settings.</p>`, "Save", true, async pw => {
+    try { await api("POST", "/api/remote", { ...b, password: pw }); $("rmkey").value = ""; $("rmclr").checked = false; RM.filled = false; $("rmstate").textContent = "Saved"; }
+    catch (e) { return e.status === 403 ? "Wrong password" : "Rejected: " + ((e.body && e.body.error) || e.message); }
+  });
+};
+
 const VIEWS = ["status", "quality", "relays", "network", "firmware"];
 let view = "status";
 function show(v) {
@@ -489,6 +560,7 @@ document.querySelector("nav").onclick = e => {
 };
 
 const M = { t0: Date.now(), output: 0x02, cycles: [0, 0, 0, 0], outcomes: {}, nextId: 101,
+  remote: { enabled: 1, key_set: true, ip_first: 10, ip_last: 20, port: 9001, fixed_ip: "", interval_s: 1, min_gap_s: 5, max_per_min: 10 },
   fw: { running: { version: "0.6.0", build: "mock", dev: false, confirmed: true }, bootloader: true,
         boot: { state: "IDLE", last_result: "COMMITTED", last_version: "0.6.0", trial_boots: 0, trial_max: 3 },
         backup: { present: true, size: 214000 }, slot: { state: "EMPTY", version: null, build: null, size: null, received: 0, reason: null }, reboot_pending: false } };
@@ -512,6 +584,11 @@ function mockStatus() {
              contact: [0, 1, 2, 3].map(ch => (M.output >> ch) & 1 && on24 ? "OK" : "OK") } },
     amc_diag: [1, 1, 1, 0],
     flash: [{ ok: true, jedec: "EF 40 18" }, { ok: true, jedec: "EF 40 18" }],
+    remote: { enabled: M.remote.enabled === 1, key_set: M.remote.key_set, state: !M.remote.enabled ? "DISABLED" : M.remote.key_set ? "CONNECTED" : "NO_KEY",
+              peer: "192.168.1.12", connected_s: t / 1000 | 0, connects: 1, auth_failures: 0, sweeps: 0, commands: 3, rejected: 0,
+              ip_first: M.remote.ip_first, ip_last: M.remote.ip_last, port: M.remote.port, fixed_ip: M.remote.fixed_ip || "0.0.0.0",
+              interval_s: M.remote.interval_s, min_gap_s: M.remote.min_gap_s, max_per_min: M.remote.max_per_min },
+    time: { valid: true, unix: Date.now() / 1000 | 0 },
     sys: { heap_free: 24800, heap_min: 15912, heap_total: 49152, reset_cause: "POWER_ON", reset_count: 0, safe_mode: false, watchdog: { phase: "run", lost: null }, rtc_kept: true, i2c_recoveries: 1, log: { queued: 0, high: 412, dropped: 0, dma_start_err: 0, dma_xfer_err: 0 },
       tasks: [{ name: "defaultTask", prio: 24, stack_free: 180 }, { name: "debugRx", prio: 25, stack_free: 310 }, { name: "debugTx", prio: 2, stack_free: 120 },
               { name: "netTask", prio: 18, stack_free: 413 }, { name: "httpServer", prio: 16, stack_free: 52 }] },
@@ -529,6 +606,13 @@ async function mockApi(method, path, b) {
     { seq: 10, rtc_s: 899997000, up_s: 600, type: 3, a: 2, b: 0, c: 0 }, { seq: 9, rtc_s: 899996400, up_s: 0, type: 1, a: 5, b: 0, c: 0 }] };
   if (path === "/api/login") { if (!pwOk(b.password)) fail(403, "bad password"); return { csrf: "mock-csrf" }; }
   if (path === "/api/logout") return {};
+  if (path === "/api/remote") {
+    if (!pwOk(b.password)) fail(403, "bad password");
+    Object.assign(M.remote, { enabled: b.enabled, ip_first: b.ip_first, ip_last: b.ip_last, port: b.port, fixed_ip: b.fixed_ip,
+      interval_s: b.interval_s, min_gap_s: b.min_gap_s, max_per_min: b.max_per_min });
+    if (b.key) M.remote.key_set = true; else if (b.clear_key) M.remote.key_set = false;
+    return {};
+  }
   if (path === "/api/relay") {
     if (b.password !== undefined && !pwOk(b.password)) fail(403, "bad password");
     const st = mockStatus(), ch = Math.log2(b.channel_mask);
@@ -784,7 +868,7 @@ async function tick() {
       else notice("The board restarted.");
     }
     if (d.fw) S.lastUp = d.fw.uptime_ms;
-    S.data = d; renderStatus(d); renderRelayCtl(); livePoint(d); refreshQuality(d); refreshEvents(d);
+    S.data = d; renderStatus(d); renderRelayCtl(); renderRemote(d); livePoint(d); refreshQuality(d); refreshEvents(d);
     if (view === "firmware") { try { renderFw(await api("GET", "/api/fw/status")); } catch (e) { } if (Date.now() % 10000 < 1100) renderFwHistory(); }
     failures = 0; document.body.classList.remove("stale"); setConn(useMock ? "Mock data · password: demo" : "Live", useMock ? "warn" : "ok");
   } catch (e) { if (++failures >= 2) { document.body.classList.add("stale"); setConn("Disconnected", "bad"); } }

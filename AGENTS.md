@@ -66,4 +66,9 @@ Fit the DIS_WDT jumper before flashing with ST-LINK (sector erase > WDT timeout)
 without it since 2026-11-25 (`docs/phase1-foundation.md`). Never add an unbounded wait: the
 Supervisor kicks every 200 ms and the STWD100 resets after 1.12 s.
 
+Remote link to the cabinet RPi (`remote_link.c`, 0.9.0): the board is a TCP client to port
+9001, protocol and the document for the RPi team in `docs/remote-link-protocol.md`. Relay commands
+use `SRC_REMOTE` through `Control_Submit` (button mode refuses them). Its shared key lives in the
+board config on flash chip 1: never print or log it. CCM RAM is nearly full (~1.7 KB free).
+
 For the temporary USART6 command interface, read docs/serial-protocol.md. SET can actuate relays; checksum is not authentication.

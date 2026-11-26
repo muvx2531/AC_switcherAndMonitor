@@ -42,6 +42,15 @@ bool Boot_RtcKept(void);
 void Boot_EvaluateSafeMode(void);
 /* RTC calendar as seconds since 2000-01-01 (meaningful across resets only if Boot_RtcKept). */
 uint32_t Boot_RtcSeconds(void);
+/* Wall-clock time. The RTC starts at 2000-01-01 on a new board; it is true time only after
+ * Boot_SetUnixTime (remote link "time" message), remembered in BKP DR7 while the backup
+ * domain keeps power. */
+#define BOOT_UNIX_2000 946684800UL
+bool Boot_TimeValid(void);
+uint32_t Boot_UnixNow(void);                 /* Boot_RtcSeconds() + BOOT_UNIX_2000 */
+/* Task context. Rejects times before 2024. Shifts the safe-mode window start by the same
+ * step so a clock change is not taken for an expired or endless reset window. */
+bool Boot_SetUnixTime(uint32_t unix_s);
 bool Boot_SafeMode(void);
 uint32_t Boot_ResetCount(void);
 /* Clear the reset counter (stable uptime reached, or serial CLRSAFE). Takes effect

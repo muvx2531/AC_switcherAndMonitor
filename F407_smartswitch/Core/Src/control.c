@@ -449,7 +449,8 @@ CtrlSubmitResult Control_Submit(const ControlRequest *req, uint32_t *out_request
   if (task == NULL || req == NULL) return CTRL_SUBMIT_NOT_READY;
   if (__get_IPSR() != 0U || req->type > CTRL_CANCEL_CYCLE) return CTRL_SUBMIT_REJECTED_INVALID;
   if (req->channel_mask == 0U || (req->channel_mask & ~CONTROL_ALL_CHANNELS) != 0U) return CTRL_SUBMIT_REJECTED_INVALID;
-  if ((req->source == SRC_WEB || req->source == SRC_SERIAL) && localLockActive()) return CTRL_SUBMIT_REJECTED_LOCAL_CONTROL;
+  if ((req->source == SRC_WEB || req->source == SRC_SERIAL || req->source == SRC_REMOTE) && localLockActive())
+    return CTRL_SUBMIT_REJECTED_LOCAL_CONTROL;
   QueuedRequest q = { .req = *req, .id = 0U };
   if (req->type == CTRL_POWER_CYCLE) {
     if (q.req.duration_s == 0U) q.req.duration_s = CONTROL_DEFAULT_CYCLE_S;
