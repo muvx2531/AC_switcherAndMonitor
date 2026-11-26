@@ -16,3 +16,5 @@
 # bootloader build outputs
 /Bootloader/Debug/
 /Bootloader/Release/
+/releases/*
+!/releases/README.md
