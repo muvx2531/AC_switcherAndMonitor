@@ -47,6 +47,12 @@ typedef struct { uint32_t seq; uint32_t rtc_s; HistEntry e; uint16_t rsv; uint32
 typedef struct { uint32_t seq; uint32_t rsv; uint64_t uwh; uint32_t rsv2[3]; uint32_t crc; } EnergyRec; /* 32 B */
 typedef struct { uint32_t magic; uint32_t seq; uint8_t amc; uint8_t rsv; int16_t ctph; uint32_t rsv2[3]; uint32_t crc; } CfgRec; /* 28 B */
 typedef struct { uint32_t magic; uint32_t version; uint32_t rsv[5]; uint32_t crc; } SuperRec;         /* 32 B */
+/* Config v2 (remote link settings). v1 records (CFG_MAGIC) are still read; the next write is v2. */
+typedef struct { uint32_t magic; uint32_t seq; uint8_t amc; uint8_t rsv; int16_t ctph;
+                 uint8_t r_en, r_first, r_last, r_gap, r_max, r_int; uint16_t r_port; uint32_t r_fixed;
+                 char r_key[68]; uint32_t rsv2[2]; uint32_t crc; } CfgRec2;                      /* 104 B */
+#define CFG2_MAGIC      0x32464353UL      /* "SCF2" */
+_Static_assert(sizeof(CfgRec2) == 104, "CfgRec2 size");
 
 _Static_assert(sizeof(EventRec) == 32, "EventRec size");
 _Static_assert(sizeof(HistRec) == 32, "HistRec size");
@@ -147,7 +153,8 @@ static StaticTask_t tcb;
 static StackType_t stack[512] __attribute__((section(".ccmram")));
 
 static volatile StState state = ST_STATE_INIT;
-static StConfig config = { 0, 0xFF, 0 };
+static StConfig config = { .seq = 0, .amc_fitted = 0xFF, .ct_phase_cdeg = 0,
+  .remote = { .enabled = 1, .ip_first = 10, .ip_last = 20, .min_gap_s = 5, .max_per_min = 10, .interval_s = 1, .port = 9001 } };
 static uint32_t cfgSlotNext = CFG_A;
 static uint64_t restoredUwh, savedUwh;
 static volatile uint32_t dropped, writeErrors;
@@ -162,34 +169,69 @@ const char *Storage_StateName(StState s)
   }
 }
 
-static bool readCfg(uint32_t addr, CfgRec *c)
+void Storage_RemoteDefaults(StRemoteConfig *r)
 {
-  if (W25Q128_Read(CHIP, addr, c, sizeof(*c)) != W25Q128_OK) return false;
-  return c->magic == CFG_MAGIC && c->seq != BLANK32 && crc32(c, offsetof(CfgRec, crc)) == c->crc;
+  memset(r, 0, sizeof(*r));
+  r->enabled = 1U; r->ip_first = 10U; r->ip_last = 20U; r->port = 9001U;
+  r->interval_s = 1U; r->min_gap_s = 5U; r->max_per_min = 10U;
+}
+
+static void setDefaults(StConfig *c)
+{
+  memset(c, 0, sizeof(*c));
+  c->amc_fitted = 0xFFU;
+  Storage_RemoteDefaults(&c->remote);
+}
+
+/* Reads a v2 or v1 config record into *out (v1: remote defaults). */
+static bool readCfg(uint32_t addr, StConfig *out)
+{
+  CfgRec2 c;
+  if (W25Q128_Read(CHIP, addr, &c, sizeof(c)) != W25Q128_OK || c.seq == BLANK32) return false;
+  setDefaults(out);
+  if (c.magic == CFG2_MAGIC && crc32(&c, offsetof(CfgRec2, crc)) == c.crc) {
+    out->seq = c.seq; out->amc_fitted = c.amc; out->ct_phase_cdeg = c.ctph;
+    StRemoteConfig *r = &out->remote;
+    r->enabled = c.r_en; r->ip_first = c.r_first; r->ip_last = c.r_last; r->min_gap_s = c.r_gap;
+    r->max_per_min = c.r_max; r->interval_s = c.r_int; r->port = c.r_port; r->fixed_ip = c.r_fixed;
+    memcpy(r->key, c.r_key, ST_REMOTE_KEY_MAX);
+    r->key[ST_REMOTE_KEY_MAX] = '\0';
+    return true;
+  }
+  const CfgRec *v1 = (const CfgRec *)(const void *)&c;
+  if (v1->magic == CFG_MAGIC && crc32(v1, offsetof(CfgRec, crc)) == v1->crc) {
+    out->seq = v1->seq; out->amc_fitted = v1->amc; out->ct_phase_cdeg = v1->ctph;
+    return true;
+  }
+  return false;
 }
 
 static void loadConfig(void)
 {
-  CfgRec a, b;
+  static StConfig a, b;            /* static: ~100 B each, called once from the default task */
   bool va = readCfg(CFG_A, &a), vb = readCfg(CFG_B, &b);
-  const CfgRec *best = NULL;
+  const StConfig *best = NULL;
   if (va && (!vb || a.seq > b.seq)) { best = &a; cfgSlotNext = CFG_B; }
   else if (vb) { best = &b; cfgSlotNext = CFG_A; }
-  if (best) { config.seq = best->seq; config.amc_fitted = best->amc; config.ct_phase_cdeg = best->ctph; }
+  if (best) { taskENTER_CRITICAL(); config = *best; taskEXIT_CRITICAL(); }
 }
 
 static bool writeConfig(const StConfig *in)
 {
-  CfgRec c;
-  memset(&c, 0xFF, sizeof(c));
-  c.magic = CFG_MAGIC; c.seq = config.seq + 1U; c.amc = in->amc_fitted; c.rsv = 0; c.ctph = in->ct_phase_cdeg;
-  c.crc = crc32(&c, offsetof(CfgRec, crc));
+  static CfgRec2 c;
+  static StConfig v;
+  memset(&c, 0, sizeof(c));
+  c.magic = CFG2_MAGIC; c.seq = config.seq + 1U; c.amc = in->amc_fitted; c.ctph = in->ct_phase_cdeg;
+  const StRemoteConfig *r = &in->remote;
+  c.r_en = r->enabled; c.r_first = r->ip_first; c.r_last = r->ip_last; c.r_gap = r->min_gap_s;
+  c.r_max = r->max_per_min; c.r_int = r->interval_s; c.r_port = r->port; c.r_fixed = r->fixed_ip;
+  memcpy(c.r_key, r->key, ST_REMOTE_KEY_MAX);
+  c.crc = crc32(&c, offsetof(CfgRec2, crc));
   if (W25Q128_EraseSector(CHIP, cfgSlotNext) != W25Q128_OK) return false;
   memcpy(wbuf, &c, sizeof(c));
   if (W25Q128_ProgramPage(CHIP, cfgSlotNext, wbuf, sizeof(c)) != W25Q128_OK) return false;
-  CfgRec v;
   if (!readCfg(cfgSlotNext, &v) || v.seq != c.seq) return false;
-  config.seq = c.seq; config.amc_fitted = c.amc; config.ct_phase_cdeg = c.ctph;
+  taskENTER_CRITICAL(); config = v; taskEXIT_CRITICAL();
   cfgSlotNext = cfgSlotNext == CFG_A ? CFG_B : CFG_A;
   return true;
 }
@@ -295,7 +337,7 @@ static void handle(QItem *q)
       ok = writeConfig(&q->u.cfg); break;
     case Q_FORMAT:
       ok = checkFormat(true) && mountAll();
-      if (ok) { config.seq = 0; config.amc_fitted = 0xFF; config.ct_phase_cdeg = 0; cfgSlotNext = CFG_A; restoredUwh = savedUwh = 0; state = ST_STATE_READY; }
+      if (ok) { taskENTER_CRITICAL(); setDefaults(&config); taskEXIT_CRITICAL(); cfgSlotNext = CFG_A; restoredUwh = savedUwh = 0; state = ST_STATE_READY; }
       break;
   }
   xSemaphoreGive(lock);
@@ -385,14 +427,27 @@ void Storage_GetStatus(StStatus *out)
   taskEXIT_CRITICAL();
 }
 
+uint32_t Storage_LastEventSeq(void) { return state == ST_STATE_READY ? evRing.seq : 0U; }
+
 /* ---- readers -------------------------------------------------------------- */
 static uint8_t readerBuf[SECTOR] __attribute__((section(".ccmbss")));   /* web readers, under lock */
 
-uint32_t Storage_ReadEvents(StEvent *out, uint32_t max)
+uint32_t Storage_ReadEvents(StEvent *out, uint32_t max) { return Storage_ReadEventsBefore(UINT32_MAX, out, max); }
+
+uint32_t Storage_ReadEventsBefore(uint32_t before_seq, StEvent *out, uint32_t max)
 {
-  if (state != ST_STATE_READY || max == 0U) return 0U;
+  if (state != ST_STATE_READY || max == 0U || before_seq == 0U) return 0U;
   xSemaphoreTake(lock, portMAX_DELAY);
   uint32_t n = 0, addr = evRing.pos, expect = evRing.seq;
+  if (before_seq <= expect) {
+    /* skip the newer records: step back (expect - before_seq + 1) slots in the ring */
+    uint32_t skip = expect - before_seq + 1U, slots = evRing.size / evRing.rec;
+    if (skip >= slots) skip = slots;               /* older than the ring: nothing valid there */
+    uint32_t off = (addr - evRing.base) / evRing.rec;
+    off = (off + slots - (skip % slots)) % slots;
+    addr = evRing.base + off * evRing.rec;
+    expect = skip >= slots ? 0U : before_seq - 1U;
+  }
   while (n < max && expect > 0U) {
     addr = addr == evRing.base ? evRing.base + evRing.size - evRing.rec : addr - evRing.rec;
     EventRec r;

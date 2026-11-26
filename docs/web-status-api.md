@@ -48,6 +48,7 @@ Implemented in Phase 2: `POST /api/login`, `POST /api/logout {token}`, `POST /ap
 |---|---|---|---|
 | `POST /api/relay` | `{type: SET_ON\|SET_OFF\|POWER_CYCLE\|CANCEL_CYCLE, channel_mask, duration_s, password?}` | `{request_id}` | 403 bad password, 409 `{reason: NO_COIL_SUPPLY|STATE_UNKNOWN|LOCAL_CONTROL}` (LOCAL_CONTROL: button control mode active on the board)\|STATE_UNKNOWN}`, 400 `INVALID`, 503 queue busy |
 | `GET /api/relay/outcome?id=` | — | `{state: PENDING\|APPLIED\|FAILED\|SUPERSEDED\|UNKNOWN}` | 404 expired |
+| `POST /api/remote` | `{enabled, ip_first, ip_last, port, fixed_ip, interval_s, min_gap_s, max_per_min, key?, clear_key?, password}` | `{}`; remote link settings (0.9.0, `docs/remote-link-protocol.md`). `key` empty or absent keeps the current key; the key is never returned | 403, 400 out of range, 503 storage not ready |
 | `POST /api/network` | `{mode: dhcp\|static, ip, mask, gw, dns, password}` | `{}` then the board switches | 403, 400 invalid |
 | `POST /api/network/confirm` | — (sent from the new address) | `{}` | 409 nothing pending |
 | `GET /api/fw/status` | — | `{running:{version,build,confirmed}, bootloader, slot:{state,version,size,check}, step, failed, history[]}` | — |
@@ -61,6 +62,9 @@ the fallback for recovery.
 Firmware update steps shown on the page: Upload → Verify (size, CRC, signature) → Ready →
 Reboot → Boot check → Committed (or rolled back by the bootloader). Relay states are kept
 across the reboot (invariants I1–I4).
+
+Since 0.9.0 `/api/status` also carries `remote` (link state, counters and settings, never the key) and
+`time {valid, unix}` (wall clock once the RPi set it).
 
 `/api/status` additionally carries, once Control exists:
 `"control": {"available": true, "coil_supply": true, "cycle_remaining_s": [0,0,0,0]}`.
