@@ -80,6 +80,7 @@ canvas{width:100%;height:150px;display:block}
   <button id="authbtn">Sign in</button>
 </header>
 <main>
+  <div class="banner warn" id="notice" hidden style="margin-bottom:12px;cursor:pointer" title="Click to close"></div>
   <section class="view" id="v-status">
     <div class="row r4" id="relays"></div>
     <p class="note" style="margin:-6px 0 0">Relay cards show the PCA9536 latch read-back only. LOW = coil off = load on (NC contacts). Contact state is not measured (AMC3330 voltage sensors).</p>
@@ -330,7 +331,16 @@ async function api(method, path, body) {
   return j;
 }
 
-function setAuth(on, csrf) { S.auth = on; S.csrf = csrf || null; $("authbtn").textContent = on ? "Sign out" : "Sign in"; renderRelayCtl(); }
+function setAuth(on, csrf) { S.auth = on; S.csrf = csrf || null; $("authbtn").textContent = on ? "Sign out" : "Sign in"; if (on) notice(""); renderRelayCtl(); }
+function notice(t) { const n = $("notice"); n.textContent = t; n.hidden = !t; }
+$("notice").onclick = () => notice("");
+/* Sessions live in the board's RAM: after any restart (firmware install, roll back, power,
+ * watchdog) the old token is gone. Asks the board whether the token is still valid. */
+async function sessionValid() {
+  try { await api("POST", "/api/session"); return true; }
+  catch (e) { return e.status !== 401; }      /* older firmware without /api/session: assume valid */
+}
+const EXPIRED = "Your session has expired (the board restarted). Sign in again.";
 $("authbtn").onclick = () => {
   if (S.auth) { api("POST", "/api/logout").finally(() => setAuth(false)); return; }
   openModal("Sign in", `<p class="sub">Required for relay commands, network settings and firmware update.</p>`, "Sign in", true, async pw => {
@@ -432,9 +442,10 @@ async function renderFwHistory() {
   } catch (e) { }
 }
 $("fwfile").onchange = () => $("fwerr").textContent = "";
-$("fwup").onclick = () => {
+$("fwup").onclick = async () => {
   $("fwerr").textContent = "";
   if (!S.auth) { $("fwerr").textContent = "Sign in first"; return; }
+  if (!useMock && !(await sessionValid())) { $("fwerr").textContent = EXPIRED; return; }
   const file = $("fwfile").files[0];
   if (!file) { $("fwerr").textContent = "Choose a .ssw file first"; return; }
   if (!file.name.toLowerCase().endsWith(".ssw")) { $("fwerr").textContent = "File must be a .ssw image (tools/make_ssw.py)"; return; }
@@ -449,7 +460,11 @@ $("fwup").onclick = () => {
     $("fwerr").textContent = x.status === 200 ? "" : "Upload rejected: " + (j.reason || j.error || x.status);
     api("GET", "/api/fw/status").then(renderFw).catch(() => {});
   };
-  x.onerror = () => { $("fwerr").textContent = "Upload failed (connection)"; };
+  x.onerror = async () => {
+    /* The board answers 401 and closes before the whole file is sent: the browser only sees a cut connection. */
+    $("fwerr").textContent = (await sessionValid()) ? "Upload failed (connection lost). Check the network and try again." : EXPIRED;
+    $("fwup").disabled = false;
+  };
   $("fwbar").style.width = "0"; $("fwup").disabled = true;
   x.send(file);
 };
@@ -507,6 +522,7 @@ async function mockApi(method, path, b) {
   const fail = (status, error, reason) => { throw Object.assign(new Error(error), { status, body: { error, reason } }); };
   const pwOk = pw => pw === "demo";
   if (path === "/api/status") return mockStatus();
+  if (path === "/api/session") { if (!S.auth) fail(401, "sign in required"); return {}; }
   if (path === "/api/waveform") return mockWave();
   if (path.startsWith("/api/events")) return { rtc_s: 900000000, uptime_s: 3600, events: [
     { seq: 12, rtc_s: 899999000, up_s: 2600, type: 6, a: 1, b: 180, c: 1850 }, { seq: 11, rtc_s: 899998000, up_s: 1600, type: 2, a: 7, b: 1, c: 2 | (0 << 8) | (1 << 16) },
@@ -763,6 +779,11 @@ function setConn(t, c) { const e = $("conn"); e.textContent = t; e.className = "
 async function tick() {
   try {
     const d = await Promise.race([api("GET", "/api/status"), new Promise((_, r) => setTimeout(() => r(new Error("timeout")), 2500))]);
+    if (S.lastUp != null && d.fw && d.fw.uptime_ms + 3000 < S.lastUp) {
+      if (S.auth) { setAuth(false); notice("The board restarted, so you were signed out. Sign in again."); }
+      else notice("The board restarted.");
+    }
+    if (d.fw) S.lastUp = d.fw.uptime_ms;
     S.data = d; renderStatus(d); renderRelayCtl(); livePoint(d); refreshQuality(d); refreshEvents(d);
     if (view === "firmware") { try { renderFw(await api("GET", "/api/fw/status")); } catch (e) { } if (Date.now() % 10000 < 1100) renderFwHistory(); }
     failures = 0; document.body.classList.remove("stale"); setConn(useMock ? "Mock data · password: demo" : "Live", useMock ? "warn" : "ok");

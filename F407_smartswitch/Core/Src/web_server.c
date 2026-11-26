@@ -636,7 +636,8 @@ static error_t requestCallback(HttpConnection *connection, const char_t *uri)
   if (post && strcmp(uri, "/api/fw/upload") == 0) return handleUpload(connection);
   if (get && strcmp(uri, "/api/relay/outcome") == 0) return handleOutcome(connection);
   if (post && (strcmp(uri, "/api/login") == 0 || strcmp(uri, "/api/logout") == 0 || strcmp(uri, "/api/relay") == 0 ||
-               strcmp(uri, "/api/fw/apply") == 0 || strcmp(uri, "/api/fw/rollback") == 0)) {
+               strcmp(uri, "/api/fw/apply") == 0 || strcmp(uri, "/api/fw/rollback") == 0 ||
+               strcmp(uri, "/api/session") == 0)) {
     char body[256];
     if (!readBody(connection, body, sizeof(body))) return sendJsonStatus(connection, 400, "{\"error\":\"bad body\"}");
     if (strcmp(uri, "/api/login") == 0) return handleLogin(connection, body);
@@ -645,6 +646,7 @@ static error_t requestCallback(HttpConnection *connection, const char_t *uri)
     if (!jsonString(body, "token", token, sizeof(token)) || !WebAuth_CheckToken(token))
       return sendJsonStatus(connection, 401, "{\"error\":\"sign in required\"}");
     if (strcmp(uri, "/api/logout") == 0) { WebAuth_Logout(token); return sendJsonStatus(connection, 200, "{}"); }
+    if (strcmp(uri, "/api/session") == 0) return sendJsonStatus(connection, 200, "{}");   /* token still valid */
     if (strcmp(uri, "/api/fw/apply") == 0) return handleFwAction(connection, body, false);
     if (strcmp(uri, "/api/fw/rollback") == 0) return handleFwAction(connection, body, true);
     return handleRelay(connection, body);

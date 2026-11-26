@@ -39,7 +39,7 @@ Design draft 2026-11-23; firmware side not implemented. The page has four tabs:
 
 ## Control and configuration endpoints
 
-Implemented in Phase 2: `POST /api/login`, `POST /api/logout {token}`,
+Implemented in Phase 2: `POST /api/login`, `POST /api/logout {token}`, `POST /api/session {token}` (200 if the session is still valid, 401 if not; sessions are lost on every restart),
 `POST /api/relay`, `GET /api/relay/outcome?id=` and `control` in `/api/status`
 (`available`, `state_known`, `coil_supply`, `cycle_remaining_s[4]`, `effective[4]`,
 `glitches`, `supply_releases`, `boot_note`). Network and firmware endpoints still return 501.
